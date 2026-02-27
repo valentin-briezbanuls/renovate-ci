@@ -350,7 +350,7 @@ renovate_run:
 
       # If no repo-level Renovate config exists, fallback to centralized config
       if [ -z "${RENOVATE_CONFIG_FILE:-}" ] && [ -z "${RENOVATE_CONFIG:-}" ]; then
-        export RENOVATE_CONFIG='{"extends":["gitlab>internal-projects/renovate-ci//.gitlab/renovate"]}'
+        export RENOVATE_CONFIG='{"extends":["gitlab>internal-projects/renovate-ci"]}'
         echo "Using centralized Renovate config from internal-projects/renovate-ci"
       fi
 
