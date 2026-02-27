@@ -1,0 +1,6 @@
+stages:
+  - security
+  - renovate
+
+include:
+  - local: .gitlab/renovate-scan.yml
