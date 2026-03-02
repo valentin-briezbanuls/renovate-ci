@@ -242,7 +242,7 @@ trivy_vulnerability_scan:
 renovate_run:
   image: renovate/renovate:latest
   stage: renovate
-  timeout: 30m
+  timeout: 60m
   needs:
     - job: osv_vulnerability_scan
       artifacts: true
