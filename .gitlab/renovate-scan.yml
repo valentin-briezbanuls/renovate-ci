@@ -284,10 +284,12 @@ renovate_run:
           apt-get update -qq && apt-get install -y jq
         fi
       fi
+  script:
     # --- Start performance monitoring in background ---
     # Reads cgroup v1/v2 metrics to get THIS container's CPU & RAM, not the host.
     - |
       echo '[]' > performance-metrics.json
+      rm -f /tmp/perf-metrics.jsonl
       (
         # Detect cgroup version and paths
         if [ -f /sys/fs/cgroup/cpu.stat ]; then
@@ -302,11 +304,9 @@ renovate_run:
         while true; do
           # --- Container CPU usage via cgroups ---
           if [ "$CGROUP_V2" = true ]; then
-            # cgroup v2: usage_usec in /sys/fs/cgroup/cpu.stat
             CPU_USAGE_US=$(awk '/^usage_usec/ {print $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null || echo 0)
             CPU_USAGE_NS=$((CPU_USAGE_US * 1000))
           else
-            # cgroup v1: nanoseconds in cpuacct
             CPU_USAGE_NS=$(cat /sys/fs/cgroup/cpuacct/cpuacct.usage 2>/dev/null || cat /sys/fs/cgroup/cpu,cpuacct/cpuacct.usage 2>/dev/null || echo 0)
           fi
 
@@ -316,7 +316,6 @@ renovate_run:
             DELTA_CPU=$((CPU_USAGE_NS - PREV_CPU_USAGE))
             DELTA_TIME=$((CURRENT_NS - PREV_TIMESTAMP_NS))
             if [ "$DELTA_TIME" -gt 0 ]; then
-              # CPU percent relative to one core; cap at num CPUs * 100
               CPU_PERCENT=$((DELTA_CPU * 100 / DELTA_TIME))
             else
               CPU_PERCENT=0
@@ -336,9 +335,7 @@ renovate_run:
             RAM_LIMIT_BYTES=$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || cat /sys/fs/cgroup/memory.limit_in_bytes 2>/dev/null || echo 0)
           fi
 
-          # "max" means unlimited in cgroup v2
           if [ "$RAM_LIMIT_BYTES" = "max" ] || [ "$RAM_LIMIT_BYTES" -gt 100000000000 ] 2>/dev/null; then
-            # Fallback to host total if container has no memory limit
             RAM_TOTAL_MB=$(awk '/^MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo)
           else
             RAM_TOTAL_MB=$((RAM_LIMIT_BYTES / 1024 / 1024))
@@ -358,9 +355,8 @@ renovate_run:
           sleep 5
         done
       ) &
-      PERF_MONITOR_PID=$!
-      echo "Performance monitor started (PID: $PERF_MONITOR_PID)"
-  script:
+      echo $! > /tmp/perf-monitor.pid
+      echo "Performance monitor started (PID: $(cat /tmp/perf-monitor.pid))"
     # --- Resolve target repo -------------------------------------------------
     - |
       REPO="${TARGET_REPO:-$CI_PROJECT_PATH}"
@@ -434,10 +430,13 @@ renovate_run:
 
     # --- Stop performance monitor and build metrics file --------------------
     - |
-      if [ -n "$PERF_MONITOR_PID" ] && kill -0 "$PERF_MONITOR_PID" 2>/dev/null; then
-        kill "$PERF_MONITOR_PID" 2>/dev/null || true
-        wait "$PERF_MONITOR_PID" 2>/dev/null || true
-        echo "Performance monitor stopped"
+      if [ -f /tmp/perf-monitor.pid ]; then
+        PERF_PID=$(cat /tmp/perf-monitor.pid)
+        if kill -0 "$PERF_PID" 2>/dev/null; then
+          kill "$PERF_PID" 2>/dev/null || true
+          wait "$PERF_PID" 2>/dev/null || true
+          echo "Performance monitor stopped (PID: $PERF_PID)"
+        fi
       fi
       if [ -f /tmp/perf-metrics.jsonl ]; then
         jq -s '.' /tmp/perf-metrics.jsonl > performance-metrics.json
