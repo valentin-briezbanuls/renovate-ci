@@ -319,8 +319,15 @@ renovate_run:
 
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+          # Top 5 processes by CPU and RAM (ps with --no-headers for clean parsing)
+          # Output: pid, cpu%, ram_mb, command (truncated)
+          TOP_PROCS=$(ps -eo pid,%cpu,rss,comm --no-headers --sort=-%cpu 2>/dev/null \
+            | head -5 \
+            | awk '{pid=$1; cpu=$2; ram_mb=int($3/1024); cmd=$4; printf "{\"pid\":%s,\"cpu\":%s,\"ram_mb\":%d,\"command\":\"%s\"},", pid, cpu, ram_mb, cmd}' \
+            | sed 's/,$//')
+
           # Append metric as JSON line
-          echo "{\"timestamp\":\"$TIMESTAMP\",\"cpu_percent\":$CPU_PERCENT,\"ram_used_mb\":$RAM_USED_MB,\"ram_total_mb\":$RAM_TOTAL_MB}" >> /tmp/perf-metrics.jsonl
+          echo "{\"timestamp\":\"$TIMESTAMP\",\"cpu_percent\":$CPU_PERCENT,\"ram_used_mb\":$RAM_USED_MB,\"ram_total_mb\":$RAM_TOTAL_MB,\"top_processes\":[$TOP_PROCS]}" >> /tmp/perf-metrics.jsonl
 
           sleep 5
         done
