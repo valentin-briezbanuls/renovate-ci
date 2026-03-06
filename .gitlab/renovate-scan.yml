@@ -284,6 +284,49 @@ renovate_run:
           apt-get update -qq && apt-get install -y jq
         fi
       fi
+    # --- Start performance monitoring in background ---
+    - |
+      echo '[]' > performance-metrics.json
+      (
+        PREV_IDLE=0; PREV_TOTAL=0
+        while true; do
+          # CPU usage from /proc/stat
+          CPU_LINE=$(head -1 /proc/stat)
+          IDLE=$(echo "$CPU_LINE" | awk '{print $5}')
+          TOTAL=0
+          for val in $(echo "$CPU_LINE" | cut -d' ' -f2-); do
+            TOTAL=$((TOTAL + val))
+          done
+          if [ "$PREV_TOTAL" -gt 0 ]; then
+            DIFF_IDLE=$((IDLE - PREV_IDLE))
+            DIFF_TOTAL=$((TOTAL - PREV_TOTAL))
+            if [ "$DIFF_TOTAL" -gt 0 ]; then
+              CPU_PERCENT=$(( (1000 * (DIFF_TOTAL - DIFF_IDLE) / DIFF_TOTAL + 5) / 10 ))
+            else
+              CPU_PERCENT=0
+            fi
+          else
+            CPU_PERCENT=0
+          fi
+          PREV_IDLE=$IDLE
+          PREV_TOTAL=$TOTAL
+
+          # RAM usage from /proc/meminfo
+          MEM_TOTAL=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+          MEM_AVAILABLE=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
+          RAM_USED_MB=$(( (MEM_TOTAL - MEM_AVAILABLE) / 1024 ))
+          RAM_TOTAL_MB=$(( MEM_TOTAL / 1024 ))
+
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          # Append metric as JSON line
+          echo "{\"timestamp\":\"$TIMESTAMP\",\"cpu_percent\":$CPU_PERCENT,\"ram_used_mb\":$RAM_USED_MB,\"ram_total_mb\":$RAM_TOTAL_MB}" >> /tmp/perf-metrics.jsonl
+
+          sleep 5
+        done
+      ) &
+      PERF_MONITOR_PID=$!
+      echo "Performance monitor started (PID: $PERF_MONITOR_PID)"
   script:
     # --- Resolve target repo -------------------------------------------------
     - |
@@ -356,6 +399,20 @@ renovate_run:
 
       renovate "$REPO" --onboarding=false --require-config=optional --report-type=file --report-path=renovate-report.json --print-config $DRY_RUN
 
+    # --- Stop performance monitor and build metrics file --------------------
+    - |
+      if [ -n "$PERF_MONITOR_PID" ] && kill -0 "$PERF_MONITOR_PID" 2>/dev/null; then
+        kill "$PERF_MONITOR_PID" 2>/dev/null || true
+        wait "$PERF_MONITOR_PID" 2>/dev/null || true
+        echo "Performance monitor stopped"
+      fi
+      if [ -f /tmp/perf-metrics.jsonl ]; then
+        jq -s '.' /tmp/perf-metrics.jsonl > performance-metrics.json
+        echo "Collected $(wc -l < /tmp/perf-metrics.jsonl) performance samples"
+      else
+        echo '[]' > performance-metrics.json
+      fi
+
     # --- Build combined report -----------------------------------------------
     - |
       # Ensure report files exist (--slurpfile requires them)
@@ -363,11 +420,13 @@ renovate_run:
       [ -f trivy-report.json ]    || echo '{"Results":[]}' > trivy-report.json
       [ -f renovate-report.json ] || echo '{}' > renovate-report.json
       [ -f Package.resolved ]     || echo '{"pins":[]}' > Package.resolved
-        
+      [ -f performance-metrics.json ] || echo '[]' > performance-metrics.json
+
               jq -n --slurpfile osv osv-report.json \
                     --slurpfile trivy trivy-report.json \
                     --slurpfile renovate renovate-report.json \
                     --slurpfile spm_resolved Package.resolved \
+                    --slurpfile perf performance-metrics.json \
                     --arg timestamp "$(date -u -Iseconds)" \
                     --arg pipeline_id "$CI_PIPELINE_ID" \
                     --arg commit_sha "$CI_COMMIT_SHA" \
@@ -538,7 +597,8 @@ renovate_run:
                       [$trivyVulns[]? | .PkgName]
                     ) | map(select(. != null and . != "")) | unique
                   )
-                }
+                },
+                "performance": ($perf[0] // [])
       }' > combined-report.json
 
     # --- Print summary -------------------------------------------------------
@@ -574,5 +634,6 @@ renovate_run:
       - osv-report.json
       - trivy-report.json
       - renovate-report.json
+      - performance-metrics.json
     when: always
     expire_in: 1 hour
