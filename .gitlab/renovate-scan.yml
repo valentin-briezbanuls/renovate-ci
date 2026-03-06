@@ -355,8 +355,10 @@ renovate_run:
           sleep 5
         done
       ) &
-      echo $! > /tmp/perf-monitor.pid
-      echo "Performance monitor started (PID: $(cat /tmp/perf-monitor.pid))"
+      PERF_PID=$!
+      echo $PERF_PID > /tmp/perf-monitor.pid
+      disown $PERF_PID 2>/dev/null || true
+      echo "Performance monitor started (PID: $PERF_PID)"
     # --- Resolve target repo -------------------------------------------------
     - |
       REPO="${TARGET_REPO:-$CI_PROJECT_PATH}"
@@ -434,9 +436,13 @@ renovate_run:
         PERF_PID=$(cat /tmp/perf-monitor.pid)
         if kill -0 "$PERF_PID" 2>/dev/null; then
           kill "$PERF_PID" 2>/dev/null || true
-          wait "$PERF_PID" 2>/dev/null || true
+          sleep 1
           echo "Performance monitor stopped (PID: $PERF_PID)"
+        else
+          echo "Performance monitor (PID: $PERF_PID) already exited"
         fi
+      else
+        echo "No performance monitor PID file found"
       fi
       if [ -f /tmp/perf-metrics.jsonl ]; then
         jq -s '.' /tmp/perf-metrics.jsonl > performance-metrics.json
