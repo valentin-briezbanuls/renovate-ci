@@ -285,48 +285,74 @@ renovate_run:
         fi
       fi
     # --- Start performance monitoring in background ---
+    # Reads cgroup v1/v2 metrics to get THIS container's CPU & RAM, not the host.
     - |
       echo '[]' > performance-metrics.json
       (
-        PREV_IDLE=0; PREV_TOTAL=0
+        # Detect cgroup version and paths
+        if [ -f /sys/fs/cgroup/cpu.stat ]; then
+          CGROUP_V2=true
+        else
+          CGROUP_V2=false
+        fi
+
+        PREV_CPU_USAGE=0
+        PREV_TIMESTAMP_NS=0
+
         while true; do
-          # CPU usage from /proc/stat
-          CPU_LINE=$(head -1 /proc/stat)
-          IDLE=$(echo "$CPU_LINE" | awk '{print $5}')
-          TOTAL=0
-          for val in $(echo "$CPU_LINE" | cut -d' ' -f2-); do
-            TOTAL=$((TOTAL + val))
-          done
-          if [ "$PREV_TOTAL" -gt 0 ]; then
-            DIFF_IDLE=$((IDLE - PREV_IDLE))
-            DIFF_TOTAL=$((TOTAL - PREV_TOTAL))
-            if [ "$DIFF_TOTAL" -gt 0 ]; then
-              CPU_PERCENT=$(( (1000 * (DIFF_TOTAL - DIFF_IDLE) / DIFF_TOTAL + 5) / 10 ))
+          # --- Container CPU usage via cgroups ---
+          if [ "$CGROUP_V2" = true ]; then
+            # cgroup v2: usage_usec in /sys/fs/cgroup/cpu.stat
+            CPU_USAGE_US=$(awk '/^usage_usec/ {print $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null || echo 0)
+            CPU_USAGE_NS=$((CPU_USAGE_US * 1000))
+          else
+            # cgroup v1: nanoseconds in cpuacct
+            CPU_USAGE_NS=$(cat /sys/fs/cgroup/cpuacct/cpuacct.usage 2>/dev/null || cat /sys/fs/cgroup/cpu,cpuacct/cpuacct.usage 2>/dev/null || echo 0)
+          fi
+
+          CURRENT_NS=$(date +%s%N 2>/dev/null || echo 0)
+
+          if [ "$PREV_CPU_USAGE" -gt 0 ] && [ "$PREV_TIMESTAMP_NS" -gt 0 ]; then
+            DELTA_CPU=$((CPU_USAGE_NS - PREV_CPU_USAGE))
+            DELTA_TIME=$((CURRENT_NS - PREV_TIMESTAMP_NS))
+            if [ "$DELTA_TIME" -gt 0 ]; then
+              # CPU percent relative to one core; cap at num CPUs * 100
+              CPU_PERCENT=$((DELTA_CPU * 100 / DELTA_TIME))
             else
               CPU_PERCENT=0
             fi
           else
             CPU_PERCENT=0
           fi
-          PREV_IDLE=$IDLE
-          PREV_TOTAL=$TOTAL
+          PREV_CPU_USAGE=$CPU_USAGE_NS
+          PREV_TIMESTAMP_NS=$CURRENT_NS
 
-          # RAM usage from /proc/meminfo
-          MEM_TOTAL=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
-          MEM_AVAILABLE=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
-          RAM_USED_MB=$(( (MEM_TOTAL - MEM_AVAILABLE) / 1024 ))
-          RAM_TOTAL_MB=$(( MEM_TOTAL / 1024 ))
+          # --- Container RAM usage via cgroups ---
+          if [ "$CGROUP_V2" = true ]; then
+            RAM_USED_BYTES=$(awk '/^anon / {print $2}' /sys/fs/cgroup/memory.stat 2>/dev/null || echo 0)
+            RAM_LIMIT_BYTES=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo 0)
+          else
+            RAM_USED_BYTES=$(cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null || cat /sys/fs/cgroup/memory.usage_in_bytes 2>/dev/null || echo 0)
+            RAM_LIMIT_BYTES=$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || cat /sys/fs/cgroup/memory.limit_in_bytes 2>/dev/null || echo 0)
+          fi
+
+          # "max" means unlimited in cgroup v2
+          if [ "$RAM_LIMIT_BYTES" = "max" ] || [ "$RAM_LIMIT_BYTES" -gt 100000000000 ] 2>/dev/null; then
+            # Fallback to host total if container has no memory limit
+            RAM_TOTAL_MB=$(awk '/^MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo)
+          else
+            RAM_TOTAL_MB=$((RAM_LIMIT_BYTES / 1024 / 1024))
+          fi
+          RAM_USED_MB=$((RAM_USED_BYTES / 1024 / 1024))
 
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-          # Top 5 processes by CPU and RAM (ps with --no-headers for clean parsing)
-          # Output: pid, cpu%, ram_mb, command (truncated)
-          TOP_PROCS=$(ps -eo pid,%cpu,rss,comm --no-headers --sort=-%cpu 2>/dev/null \
+          # Top 5 processes in this container by RSS
+          TOP_PROCS=$(ps -eo pid,%cpu,rss,comm --no-headers --sort=-rss 2>/dev/null \
             | head -5 \
             | awk '{pid=$1; cpu=$2; ram_mb=int($3/1024); cmd=$4; printf "{\"pid\":%s,\"cpu\":%s,\"ram_mb\":%d,\"command\":\"%s\"},", pid, cpu, ram_mb, cmd}' \
             | sed 's/,$//')
 
-          # Append metric as JSON line
           echo "{\"timestamp\":\"$TIMESTAMP\",\"cpu_percent\":$CPU_PERCENT,\"ram_used_mb\":$RAM_USED_MB,\"ram_total_mb\":$RAM_TOTAL_MB,\"top_processes\":[$TOP_PROCS]}" >> /tmp/perf-metrics.jsonl
 
           sleep 5
