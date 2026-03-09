@@ -441,7 +441,7 @@ renovate_run:
         echo "Using centralized inline Renovate config from CI template"
       fi
 
-      renovate "$REPO" --onboarding=false --require-config=optional --report-type=file --report-path=renovate-report.json --print-config $DRY_RUN
+      renovate "$REPO" --onboarding=false --require-config=optional --report-type=file --report-path=renovate-report.json $DRY_RUN
 
     # --- Stop performance monitor and build metrics file --------------------
     - |
