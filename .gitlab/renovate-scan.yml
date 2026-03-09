@@ -290,12 +290,20 @@ renovate_run:
     - |
       echo '[]' > performance-metrics.json
       rm -f /tmp/perf-metrics.jsonl
+      touch /tmp/perf-metrics.jsonl
       (
         # Detect cgroup version and paths
         if [ -f /sys/fs/cgroup/cpu.stat ]; then
           CGROUP_V2=true
         else
           CGROUP_V2=false
+        fi
+
+        # Check if date supports nanoseconds (%N)
+        if date +%s%N 2>/dev/null | grep -q 'N$'; then
+          HAS_NANO=false
+        else
+          HAS_NANO=true
         fi
 
         PREV_CPU_USAGE=0
@@ -310,13 +318,18 @@ renovate_run:
             CPU_USAGE_NS=$(cat /sys/fs/cgroup/cpuacct/cpuacct.usage 2>/dev/null || cat /sys/fs/cgroup/cpu,cpuacct/cpuacct.usage 2>/dev/null || echo 0)
           fi
 
-          CURRENT_NS=$(date +%s%N 2>/dev/null || echo 0)
+          if [ "$HAS_NANO" = true ]; then
+            CURRENT_NS=$(date +%s%N 2>/dev/null || echo 0)
+          else
+            # Fallback: use seconds with 000000000 appended
+            CURRENT_NS=$(date +%s 2>/dev/null || echo 0)000000000
+          fi
 
-          if [ "$PREV_CPU_USAGE" -gt 0 ] && [ "$PREV_TIMESTAMP_NS" -gt 0 ]; then
-            DELTA_CPU=$((CPU_USAGE_NS - PREV_CPU_USAGE))
-            DELTA_TIME=$((CURRENT_NS - PREV_TIMESTAMP_NS))
-            if [ "$DELTA_TIME" -gt 0 ]; then
-              CPU_PERCENT=$((DELTA_CPU * 100 / DELTA_TIME))
+          if [ "$PREV_CPU_USAGE" -gt 0 ] 2>/dev/null && [ "$PREV_TIMESTAMP_NS" -gt 0 ] 2>/dev/null; then
+            DELTA_CPU=$((CPU_USAGE_NS - PREV_CPU_USAGE)) 2>/dev/null || DELTA_CPU=0
+            DELTA_TIME=$((CURRENT_NS - PREV_TIMESTAMP_NS)) 2>/dev/null || DELTA_TIME=0
+            if [ "$DELTA_TIME" -gt 0 ] 2>/dev/null; then
+              CPU_PERCENT=$((DELTA_CPU * 100 / DELTA_TIME)) 2>/dev/null || CPU_PERCENT=0
             else
               CPU_PERCENT=0
             fi
@@ -336,19 +349,19 @@ renovate_run:
           fi
 
           if [ "$RAM_LIMIT_BYTES" = "max" ] || [ "$RAM_LIMIT_BYTES" -gt 100000000000 ] 2>/dev/null; then
-            RAM_TOTAL_MB=$(awk '/^MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo)
+            RAM_TOTAL_MB=$(awk '/^MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 0)
           else
-            RAM_TOTAL_MB=$((RAM_LIMIT_BYTES / 1024 / 1024))
+            RAM_TOTAL_MB=$((RAM_LIMIT_BYTES / 1024 / 1024)) 2>/dev/null || RAM_TOTAL_MB=0
           fi
-          RAM_USED_MB=$((RAM_USED_BYTES / 1024 / 1024))
+          RAM_USED_MB=$((RAM_USED_BYTES / 1024 / 1024)) 2>/dev/null || RAM_USED_MB=0
 
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
-          # Top 5 processes in this container by RSS
+          # Top 5 processes in this container by RSS (handle both GNU and BusyBox ps)
           TOP_PROCS=$(ps -eo pid,%cpu,rss,comm --no-headers --sort=-rss 2>/dev/null \
             | head -5 \
             | awk '{pid=$1; cpu=$2; ram_mb=int($3/1024); cmd=$4; printf "{\"pid\":%s,\"cpu\":%s,\"ram_mb\":%d,\"command\":\"%s\"},", pid, cpu, ram_mb, cmd}' \
-            | sed 's/,$//')
+            | sed 's/,$//' 2>/dev/null || true)
 
           echo "{\"timestamp\":\"$TIMESTAMP\",\"cpu_percent\":$CPU_PERCENT,\"ram_used_mb\":$RAM_USED_MB,\"ram_total_mb\":$RAM_TOTAL_MB,\"top_processes\":[$TOP_PROCS]}" >> /tmp/perf-metrics.jsonl
 
@@ -444,10 +457,30 @@ renovate_run:
       else
         echo "No performance monitor PID file found"
       fi
-      if [ -f /tmp/perf-metrics.jsonl ]; then
-        jq -s '.' /tmp/perf-metrics.jsonl > performance-metrics.json
-        echo "Collected $(wc -l < /tmp/perf-metrics.jsonl) performance samples"
+      if [ -s /tmp/perf-metrics.jsonl ]; then
+        echo "Raw JSONL lines: $(wc -l < /tmp/perf-metrics.jsonl)"
+        # Use temp file to avoid truncating output on jq failure
+        if jq -s '.' /tmp/perf-metrics.jsonl > /tmp/perf-metrics-array.json 2>/dev/null; then
+          mv /tmp/perf-metrics-array.json performance-metrics.json
+          echo "Collected $(jq 'length' performance-metrics.json) performance samples"
+        else
+          echo "WARNING: jq failed to parse JSONL, falling back to line-by-line filtering"
+          # Filter out invalid JSON lines and retry
+          > /tmp/perf-metrics-clean.jsonl
+          while IFS= read -r line; do
+            if echo "$line" | jq empty 2>/dev/null; then
+              echo "$line" >> /tmp/perf-metrics-clean.jsonl
+            fi
+          done < /tmp/perf-metrics.jsonl
+          if [ -s /tmp/perf-metrics-clean.jsonl ]; then
+            jq -s '.' /tmp/perf-metrics-clean.jsonl > performance-metrics.json 2>/dev/null || echo '[]' > performance-metrics.json
+          else
+            echo '[]' > performance-metrics.json
+          fi
+          echo "Recovered $(jq 'length' performance-metrics.json 2>/dev/null || echo 0) performance samples after cleanup"
+        fi
       else
+        echo "No performance metrics collected (JSONL file empty or missing)"
         echo '[]' > performance-metrics.json
       fi
 
@@ -458,7 +491,7 @@ renovate_run:
       [ -f trivy-report.json ]    || echo '{"Results":[]}' > trivy-report.json
       [ -f renovate-report.json ] || echo '{}' > renovate-report.json
       [ -f Package.resolved ]     || echo '{"pins":[]}' > Package.resolved
-      [ -f performance-metrics.json ] || echo '[]' > performance-metrics.json
+      [ -s performance-metrics.json ] || echo '[]' > performance-metrics.json
 
               jq -n --slurpfile osv osv-report.json \
                     --slurpfile trivy trivy-report.json \
