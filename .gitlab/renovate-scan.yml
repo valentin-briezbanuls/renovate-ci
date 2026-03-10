@@ -39,6 +39,88 @@ stages:
   - Package.resolved
   - Cartfile.resolved
 
+# -- Reusable performance monitoring scripts --------------------------------
+.perf_start: &perf_start |
+  rm -f /tmp/perf-metrics.jsonl
+  touch /tmp/perf-metrics.jsonl
+  (
+    if [ -f /sys/fs/cgroup/cpu.stat ]; then CGROUP_V2=true; else CGROUP_V2=false; fi
+    if date +%s%N 2>/dev/null | grep -q 'N$'; then HAS_NANO=false; else HAS_NANO=true; fi
+    PREV_CPU_USAGE=0
+    PREV_TIMESTAMP_NS=0
+    while true; do
+      if [ "$CGROUP_V2" = true ]; then
+        CPU_USAGE_US=$(awk '/^usage_usec/ {print $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null || echo 0)
+        CPU_USAGE_NS=$((CPU_USAGE_US * 1000))
+      else
+        CPU_USAGE_NS=$(cat /sys/fs/cgroup/cpuacct/cpuacct.usage 2>/dev/null || cat /sys/fs/cgroup/cpu,cpuacct/cpuacct.usage 2>/dev/null || echo 0)
+      fi
+      if [ "$HAS_NANO" = true ]; then
+        CURRENT_NS=$(date +%s%N 2>/dev/null || echo 0)
+      else
+        CURRENT_NS=$(date +%s 2>/dev/null || echo 0)000000000
+      fi
+      if [ "$PREV_CPU_USAGE" -gt 0 ] 2>/dev/null && [ "$PREV_TIMESTAMP_NS" -gt 0 ] 2>/dev/null; then
+        DELTA_CPU=$((CPU_USAGE_NS - PREV_CPU_USAGE)) 2>/dev/null || DELTA_CPU=0
+        DELTA_TIME=$((CURRENT_NS - PREV_TIMESTAMP_NS)) 2>/dev/null || DELTA_TIME=0
+        if [ "$DELTA_TIME" -gt 0 ] 2>/dev/null; then
+          CPU_PERCENT=$((DELTA_CPU * 100 / DELTA_TIME)) 2>/dev/null || CPU_PERCENT=0
+        else
+          CPU_PERCENT=0
+        fi
+      else
+        CPU_PERCENT=0
+      fi
+      PREV_CPU_USAGE=$CPU_USAGE_NS
+      PREV_TIMESTAMP_NS=$CURRENT_NS
+      if [ "$CGROUP_V2" = true ]; then
+        RAM_USED_BYTES=$(awk '/^anon / {print $2}' /sys/fs/cgroup/memory.stat 2>/dev/null || echo 0)
+        RAM_LIMIT_BYTES=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo 0)
+      else
+        RAM_USED_BYTES=$(cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null || cat /sys/fs/cgroup/memory.usage_in_bytes 2>/dev/null || echo 0)
+        RAM_LIMIT_BYTES=$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || cat /sys/fs/cgroup/memory.limit_in_bytes 2>/dev/null || echo 0)
+      fi
+      if [ "$RAM_LIMIT_BYTES" = "max" ] || [ "$RAM_LIMIT_BYTES" -gt 100000000000 ] 2>/dev/null; then
+        RAM_TOTAL_MB=$(awk '/^MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 0)
+      else
+        RAM_TOTAL_MB=$((RAM_LIMIT_BYTES / 1024 / 1024)) 2>/dev/null || RAM_TOTAL_MB=0
+      fi
+      RAM_USED_MB=$((RAM_USED_BYTES / 1024 / 1024)) 2>/dev/null || RAM_USED_MB=0
+      TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+      TOP_PROCS=$(ps -eo pid,%cpu,rss,comm --no-headers --sort=-rss 2>/dev/null \
+        | head -5 \
+        | awk '{pid=$1; cpu=$2; ram_mb=int($3/1024); cmd=$4; printf "{\"pid\":%s,\"cpu\":%s,\"ram_mb\":%d,\"command\":\"%s\"},", pid, cpu, ram_mb, cmd}' \
+        | sed 's/,$//' 2>/dev/null || true)
+      echo "{\"timestamp\":\"$TIMESTAMP\",\"cpu_percent\":$CPU_PERCENT,\"ram_used_mb\":$RAM_USED_MB,\"ram_total_mb\":$RAM_TOTAL_MB,\"top_processes\":[$TOP_PROCS]}" >> /tmp/perf-metrics.jsonl
+      sleep 5
+    done
+  ) &
+  echo $! > /tmp/perf-monitor.pid
+  disown $(cat /tmp/perf-monitor.pid) 2>/dev/null || true
+  echo "Performance monitor started (PID: $(cat /tmp/perf-monitor.pid))"
+
+# Stops the monitor and writes JSON array to $1 (default: perf-metrics.json)
+.perf_stop: &perf_stop |
+  PERF_OUTPUT="${PERF_OUTPUT_FILE:-perf-metrics.json}"
+  if [ -f /tmp/perf-monitor.pid ]; then
+    PERF_PID=$(cat /tmp/perf-monitor.pid)
+    kill "$PERF_PID" 2>/dev/null || true
+    sleep 1
+    echo "Performance monitor stopped (PID: $PERF_PID)"
+  fi
+  if [ -s /tmp/perf-metrics.jsonl ]; then
+    echo "Raw JSONL lines: $(wc -l < /tmp/perf-metrics.jsonl)"
+    if jq -s '.' /tmp/perf-metrics.jsonl > /tmp/perf-array.json 2>/dev/null; then
+      mv /tmp/perf-array.json "$PERF_OUTPUT"
+    else
+      echo '[]' > "$PERF_OUTPUT"
+    fi
+    echo "Collected $(jq 'length' "$PERF_OUTPUT" 2>/dev/null || echo 0) performance samples in $PERF_OUTPUT"
+  else
+    echo '[]' > "$PERF_OUTPUT"
+    echo "No performance metrics collected"
+  fi
+
 # ---------------------------------------------------------------------------
 # OSV vulnerability scan — works for any ecosystem (npm, pip, gem, cargo, go,
 # gradle, maven, composer, etc.) via recursive auto-detection.
@@ -59,10 +141,11 @@ osv_vulnerability_scan:
     - when: never
   before_script:
     - apt-get update -qq
-    - apt-get install -y wget
+    - apt-get install -y wget jq procps
     - wget -q https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 -O /usr/local/bin/osv-scanner
     - chmod +x /usr/local/bin/osv-scanner
   script:
+    - *perf_start
     # --- Generate Gradle lockfiles if needed ---------------------------------
     # Instead of running Gradle (which needs JDK + Android SDK for Android
     # projects), we parse build.gradle files directly to extract declared
@@ -151,9 +234,12 @@ osv_vulnerability_scan:
       fi
 
       echo "OSV scan completed (exit code: $OSV_EXIT_CODE)"
+    - PERF_OUTPUT_FILE=osv-perf-metrics.json
+    - *perf_stop
   artifacts:
     paths:
       - osv-report.json
+      - osv-perf-metrics.json
     when: always
     expire_in: 1 week
 
@@ -176,8 +262,9 @@ trivy_vulnerability_scan:
       when: on_success
     - when: never
   before_script:
-    - apt-get update -qq && apt-get install -y curl jq
+    - apt-get update -qq && apt-get install -y curl jq procps
   script:
+    - *perf_start
     # --- Install Trivy
     - |
       curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin latest
@@ -230,9 +317,12 @@ trivy_vulnerability_scan:
       fi
 
       echo "Trivy scan completed (exit code: $TRIVY_EXIT_CODE)"
+    - PERF_OUTPUT_FILE=trivy-perf-metrics.json
+    - *perf_stop
   artifacts:
     paths:
       - trivy-report.json
+      - trivy-perf-metrics.json
     when: always
     expire_in: 1 week
 
@@ -286,93 +376,7 @@ renovate_run:
         fi
       fi
   script:
-    # --- Start performance monitoring in background ---
-    # Reads cgroup v1/v2 metrics to get THIS container's CPU & RAM, not the host.
-    - |
-      echo '[]' > performance-metrics.json
-      rm -f /tmp/perf-metrics.jsonl
-      touch /tmp/perf-metrics.jsonl
-      (
-        # Detect cgroup version and paths
-        if [ -f /sys/fs/cgroup/cpu.stat ]; then
-          CGROUP_V2=true
-        else
-          CGROUP_V2=false
-        fi
-
-        # Check if date supports nanoseconds (%N)
-        if date +%s%N 2>/dev/null | grep -q 'N$'; then
-          HAS_NANO=false
-        else
-          HAS_NANO=true
-        fi
-
-        PREV_CPU_USAGE=0
-        PREV_TIMESTAMP_NS=0
-
-        while true; do
-          # --- Container CPU usage via cgroups ---
-          if [ "$CGROUP_V2" = true ]; then
-            CPU_USAGE_US=$(awk '/^usage_usec/ {print $2}' /sys/fs/cgroup/cpu.stat 2>/dev/null || echo 0)
-            CPU_USAGE_NS=$((CPU_USAGE_US * 1000))
-          else
-            CPU_USAGE_NS=$(cat /sys/fs/cgroup/cpuacct/cpuacct.usage 2>/dev/null || cat /sys/fs/cgroup/cpu,cpuacct/cpuacct.usage 2>/dev/null || echo 0)
-          fi
-
-          if [ "$HAS_NANO" = true ]; then
-            CURRENT_NS=$(date +%s%N 2>/dev/null || echo 0)
-          else
-            # Fallback: use seconds with 000000000 appended
-            CURRENT_NS=$(date +%s 2>/dev/null || echo 0)000000000
-          fi
-
-          if [ "$PREV_CPU_USAGE" -gt 0 ] 2>/dev/null && [ "$PREV_TIMESTAMP_NS" -gt 0 ] 2>/dev/null; then
-            DELTA_CPU=$((CPU_USAGE_NS - PREV_CPU_USAGE)) 2>/dev/null || DELTA_CPU=0
-            DELTA_TIME=$((CURRENT_NS - PREV_TIMESTAMP_NS)) 2>/dev/null || DELTA_TIME=0
-            if [ "$DELTA_TIME" -gt 0 ] 2>/dev/null; then
-              CPU_PERCENT=$((DELTA_CPU * 100 / DELTA_TIME)) 2>/dev/null || CPU_PERCENT=0
-            else
-              CPU_PERCENT=0
-            fi
-          else
-            CPU_PERCENT=0
-          fi
-          PREV_CPU_USAGE=$CPU_USAGE_NS
-          PREV_TIMESTAMP_NS=$CURRENT_NS
-
-          # --- Container RAM usage via cgroups ---
-          if [ "$CGROUP_V2" = true ]; then
-            RAM_USED_BYTES=$(awk '/^anon / {print $2}' /sys/fs/cgroup/memory.stat 2>/dev/null || echo 0)
-            RAM_LIMIT_BYTES=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo 0)
-          else
-            RAM_USED_BYTES=$(cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null || cat /sys/fs/cgroup/memory.usage_in_bytes 2>/dev/null || echo 0)
-            RAM_LIMIT_BYTES=$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || cat /sys/fs/cgroup/memory.limit_in_bytes 2>/dev/null || echo 0)
-          fi
-
-          if [ "$RAM_LIMIT_BYTES" = "max" ] || [ "$RAM_LIMIT_BYTES" -gt 100000000000 ] 2>/dev/null; then
-            RAM_TOTAL_MB=$(awk '/^MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 0)
-          else
-            RAM_TOTAL_MB=$((RAM_LIMIT_BYTES / 1024 / 1024)) 2>/dev/null || RAM_TOTAL_MB=0
-          fi
-          RAM_USED_MB=$((RAM_USED_BYTES / 1024 / 1024)) 2>/dev/null || RAM_USED_MB=0
-
-          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-          # Top 5 processes in this container by RSS (handle both GNU and BusyBox ps)
-          TOP_PROCS=$(ps -eo pid,%cpu,rss,comm --no-headers --sort=-rss 2>/dev/null \
-            | head -5 \
-            | awk '{pid=$1; cpu=$2; ram_mb=int($3/1024); cmd=$4; printf "{\"pid\":%s,\"cpu\":%s,\"ram_mb\":%d,\"command\":\"%s\"},", pid, cpu, ram_mb, cmd}' \
-            | sed 's/,$//' 2>/dev/null || true)
-
-          echo "{\"timestamp\":\"$TIMESTAMP\",\"cpu_percent\":$CPU_PERCENT,\"ram_used_mb\":$RAM_USED_MB,\"ram_total_mb\":$RAM_TOTAL_MB,\"top_processes\":[$TOP_PROCS]}" >> /tmp/perf-metrics.jsonl
-
-          sleep 5
-        done
-      ) &
-      PERF_PID=$!
-      echo $PERF_PID > /tmp/perf-monitor.pid
-      disown $PERF_PID 2>/dev/null || true
-      echo "Performance monitor started (PID: $PERF_PID)"
+    - *perf_start
     # --- Resolve target repo -------------------------------------------------
     - |
       REPO="${TARGET_REPO:-$CI_PROJECT_PATH}"
@@ -445,45 +449,8 @@ renovate_run:
       renovate "$REPO" --onboarding=false --require-config=optional --report-type=file --report-path=renovate-report.json $DRY_RUN
 
     # --- Stop performance monitor and build metrics file --------------------
-    - |
-      if [ -f /tmp/perf-monitor.pid ]; then
-        PERF_PID=$(cat /tmp/perf-monitor.pid)
-        if kill -0 "$PERF_PID" 2>/dev/null; then
-          kill "$PERF_PID" 2>/dev/null || true
-          sleep 1
-          echo "Performance monitor stopped (PID: $PERF_PID)"
-        else
-          echo "Performance monitor (PID: $PERF_PID) already exited"
-        fi
-      else
-        echo "No performance monitor PID file found"
-      fi
-      if [ -s /tmp/perf-metrics.jsonl ]; then
-        echo "Raw JSONL lines: $(wc -l < /tmp/perf-metrics.jsonl)"
-        # Use temp file to avoid truncating output on jq failure
-        if jq -s '.' /tmp/perf-metrics.jsonl > /tmp/perf-metrics-array.json 2>/dev/null; then
-          mv /tmp/perf-metrics-array.json performance-metrics.json
-          echo "Collected $(jq 'length' performance-metrics.json) performance samples"
-        else
-          echo "WARNING: jq failed to parse JSONL, falling back to line-by-line filtering"
-          # Filter out invalid JSON lines and retry
-          > /tmp/perf-metrics-clean.jsonl
-          while IFS= read -r line; do
-            if echo "$line" | jq empty 2>/dev/null; then
-              echo "$line" >> /tmp/perf-metrics-clean.jsonl
-            fi
-          done < /tmp/perf-metrics.jsonl
-          if [ -s /tmp/perf-metrics-clean.jsonl ]; then
-            jq -s '.' /tmp/perf-metrics-clean.jsonl > performance-metrics.json 2>/dev/null || echo '[]' > performance-metrics.json
-          else
-            echo '[]' > performance-metrics.json
-          fi
-          echo "Recovered $(jq 'length' performance-metrics.json 2>/dev/null || echo 0) performance samples after cleanup"
-        fi
-      else
-        echo "No performance metrics collected (JSONL file empty or missing)"
-        echo '[]' > performance-metrics.json
-      fi
+    - PERF_OUTPUT_FILE=performance-metrics.json
+    - *perf_stop
 
     # --- Build combined report -----------------------------------------------
     - |
@@ -493,12 +460,16 @@ renovate_run:
       [ -f renovate-report.json ] || echo '{}' > renovate-report.json
       [ -f Package.resolved ]     || echo '{"pins":[]}' > Package.resolved
       [ -s performance-metrics.json ] || echo '[]' > performance-metrics.json
+      [ -s osv-perf-metrics.json ]  || echo '[]' > osv-perf-metrics.json
+      [ -s trivy-perf-metrics.json ] || echo '[]' > trivy-perf-metrics.json
 
               jq -n --slurpfile osv osv-report.json \
                     --slurpfile trivy trivy-report.json \
                     --slurpfile renovate renovate-report.json \
                     --slurpfile spm_resolved Package.resolved \
                     --slurpfile perf performance-metrics.json \
+                    --slurpfile osv_perf osv-perf-metrics.json \
+                    --slurpfile trivy_perf trivy-perf-metrics.json \
                     --arg timestamp "$(date -u -Iseconds)" \
                     --arg pipeline_id "$CI_PIPELINE_ID" \
                     --arg commit_sha "$CI_COMMIT_SHA" \
@@ -670,7 +641,9 @@ renovate_run:
                     ) | map(select(. != null and . != "")) | unique
                   )
                 },
-                "performance": ($perf[0] // [])
+                "performance": ($perf[0] // []),
+                "performance_osv": ($osv_perf[0] // []),
+                "performance_trivy": ($trivy_perf[0] // [])
       }' > combined-report.json
 
     # --- Print summary -------------------------------------------------------
