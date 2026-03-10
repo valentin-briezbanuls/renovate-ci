@@ -491,6 +491,7 @@ renovate_run:
       # Dry-run mode: "lookup" only checks for updates (fast, no lockfile resolution),
       # "full" simulates branches+commits (slow), "" applies changes for real.
       # Default to lookup for dashboard triggers; respect RENOVATE_DRY_RUN override.
+      echo "RENOVATE_DRY_RUN='${RENOVATE_DRY_RUN:-}' (pipeline_source=$CI_PIPELINE_SOURCE)"
       if [ "${RENOVATE_DRY_RUN:-}" = "full" ]; then
         DRY_RUN="--dry-run=full"
       elif [ "${RENOVATE_DRY_RUN:-}" = "false" ]; then
@@ -502,6 +503,7 @@ renovate_run:
       else
         DRY_RUN="--dry-run=lookup"
       fi
+      echo "Renovate mode: ${DRY_RUN:-REAL (no dry-run)}"
 
       # Auto-detect renovate config in .gitlab/ if not at repo root
       if [ ! -f renovate.json ] && [ ! -f .renovaterc ] && [ ! -f .renovaterc.json ]; then
