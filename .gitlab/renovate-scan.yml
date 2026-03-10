@@ -416,8 +416,14 @@ renovate_run:
     RENOVATE_ENDPOINT: "$CI_SERVER_URL/api/v4/"
     RENOVATE_BASE_BRANCHES: "$CI_COMMIT_REF_NAME"
     RENOVATE_GIT_AUTHOR: "Renovate Bot <renovate@isee-u.fr>"
+    RENOVATE_REPOSITORY_CACHE: "enabled"
+    RENOVATE_CACHE_DIR: "${CI_PROJECT_DIR}/.renovate-cache"
     GITHUB_COM_TOKEN: "$GITHUB_COM_TOKEN"
     LOG_LEVEL: info
+  cache:
+    key: "renovate-cache-${CI_PROJECT_PATH_SLUG}"
+    paths:
+      - .renovate-cache/
   before_script:
     - |
       if [ -z "$RENOVATE_TOKEN" ]; then
@@ -505,7 +511,57 @@ renovate_run:
 
       # If no repo-level Renovate config exists, fallback to centralized config
       if [ -z "${RENOVATE_CONFIG_FILE:-}" ] && [ -z "${RENOVATE_CONFIG:-}" ]; then
-        export RENOVATE_CONFIG='{"$schema":"https://docs.renovatebot.com/renovate-schema.json","extends":["config:recommended"],"enabled":true,"timezone":"Europe/Paris","automerge":false,"prHourlyLimit":10,"prConcurrentLimit":5,"ignorePaths":[".build/**","**/node_modules/**","**/Pods/**"],"osvVulnerabilityAlerts":true,"vulnerabilityAlerts":{"enabled":true,"labels":["security","vulnerability","high-priority"],"prBodyNotes":["**Severity:** {{{vulnerabilitySeverity}}}","**CVEs:** {{{cveUrls}}}"]},"enabledManagers":["cocoapods","swift","gradle","gradle-wrapper","npm","bundler","pip_requirements"],"packageRules":[{"description":"Group iOS dependency updates","matchManagers":["cocoapods"],"groupName":"iOS CocoaPods dependencies","labels":["dependencies","automated","ios","cocoapods"]},{"description":"Group iOS Swift Package Manager dependency updates","matchManagers":["swift"],"groupName":"iOS Swift Package Manager dependencies","labels":["dependencies","automated","ios","spm"]},{"description":"Group Android Gradle dependency updates","matchManagers":["gradle","gradle-wrapper"],"groupName":"Android Gradle dependencies","labels":["dependencies","automated","android","gradle"]},{"description":"Group Web npm dependency updates","matchManagers":["npm"],"groupName":"Web npm dependencies","labels":["dependencies","automated","web","npm"]},{"description":"Group Web Ruby/Rails dependency updates","matchManagers":["bundler"],"groupName":"Web Ruby dependencies","labels":["dependencies","automated","web","ruby","bundler"]},{"description":"Group Python pip dependency updates","matchManagers":["pip_requirements"],"groupName":"Python pip dependencies","labels":["dependencies","automated","python","pip"]},{"matchUpdateTypes":["patch"],"automerge":false,"labels":["patch-update"]},{"matchDepTypes":["devDependencies"],"labels":["dev-dependencies"],"automerge":false}],"commitMessagePrefix":"chore:","commitMessageAction":"update","commitMessageTopic":"{{depName}}","commitMessageExtra":"to {{newVersion}}{{#if isVulnerabilityAlert}} (security){{/if}}"}'
+        # Auto-detect relevant package managers based on files present
+        MANAGERS=""
+        PACKAGE_RULES=""
+        if [ -f Podfile ] || [ -f Podfile.lock ]; then
+          MANAGERS="${MANAGERS:+$MANAGERS,}\"cocoapods\""
+          PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group iOS CocoaPods updates\",\"matchManagers\":[\"cocoapods\"],\"groupName\":\"iOS CocoaPods dependencies\",\"labels\":[\"dependencies\",\"automated\",\"ios\",\"cocoapods\"]}"
+        fi
+        if [ -f Package.swift ] || [ -f Package.resolved ]; then
+          MANAGERS="${MANAGERS:+$MANAGERS,}\"swift\""
+          PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group iOS SPM updates\",\"matchManagers\":[\"swift\"],\"groupName\":\"iOS Swift Package Manager dependencies\",\"labels\":[\"dependencies\",\"automated\",\"ios\",\"spm\"]}"
+        fi
+        if [ -f build.gradle ] || [ -f build.gradle.kts ] || find . -maxdepth 2 -name "build.gradle*" 2>/dev/null | grep -q .; then
+          MANAGERS="${MANAGERS:+$MANAGERS,}\"gradle\",\"gradle-wrapper\""
+          PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group Android Gradle updates\",\"matchManagers\":[\"gradle\",\"gradle-wrapper\"],\"groupName\":\"Android Gradle dependencies\",\"labels\":[\"dependencies\",\"automated\",\"android\",\"gradle\"]}"
+        fi
+        if [ -f package.json ] || [ -f package-lock.json ] || [ -f yarn.lock ] || [ -f pnpm-lock.yaml ]; then
+          MANAGERS="${MANAGERS:+$MANAGERS,}\"npm\""
+          PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group npm updates\",\"matchManagers\":[\"npm\"],\"groupName\":\"Web npm dependencies\",\"labels\":[\"dependencies\",\"automated\",\"web\",\"npm\"]}"
+        fi
+        if [ -f Gemfile ] || [ -f Gemfile.lock ]; then
+          MANAGERS="${MANAGERS:+$MANAGERS,}\"bundler\""
+          PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group Ruby/Rails updates\",\"matchManagers\":[\"bundler\"],\"groupName\":\"Web Ruby dependencies\",\"labels\":[\"dependencies\",\"automated\",\"web\",\"ruby\",\"bundler\"]}"
+        fi
+        if [ -f requirements.txt ] || [ -f poetry.lock ] || [ -f Pipfile ]; then
+          MANAGERS="${MANAGERS:+$MANAGERS,}\"pip_requirements\""
+          PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group Python pip updates\",\"matchManagers\":[\"pip_requirements\"],\"groupName\":\"Python pip dependencies\",\"labels\":[\"dependencies\",\"automated\",\"python\",\"pip\"]}"
+        fi
+        if [ -f pubspec.yaml ] || [ -f pubspec.lock ]; then
+          MANAGERS="${MANAGERS:+$MANAGERS,}\"pub\""
+          PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group Flutter/Dart updates\",\"matchManagers\":[\"pub\"],\"groupName\":\"Flutter Dart dependencies\",\"labels\":[\"dependencies\",\"automated\",\"dart\",\"pub\"]}"
+        fi
+        if [ -f go.mod ] || [ -f go.sum ]; then
+          MANAGERS="${MANAGERS:+$MANAGERS,}\"gomod\""
+          PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group Go module updates\",\"matchManagers\":[\"gomod\"],\"groupName\":\"Go module dependencies\",\"labels\":[\"dependencies\",\"automated\",\"go\"]}"
+        fi
+        if [ -f Cargo.toml ] || [ -f Cargo.lock ]; then
+          MANAGERS="${MANAGERS:+$MANAGERS,}\"cargo\""
+          PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group Rust Cargo updates\",\"matchManagers\":[\"cargo\"],\"groupName\":\"Rust Cargo dependencies\",\"labels\":[\"dependencies\",\"automated\",\"rust\",\"cargo\"]}"
+        fi
+        if [ -f composer.json ] || [ -f composer.lock ]; then
+          MANAGERS="${MANAGERS:+$MANAGERS,}\"composer\""
+          PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group PHP Composer updates\",\"matchManagers\":[\"composer\"],\"groupName\":\"PHP Composer dependencies\",\"labels\":[\"dependencies\",\"automated\",\"php\",\"composer\"]}"
+        fi
+
+        echo "Detected managers: $MANAGERS"
+
+        # Common package rules (appended to ecosystem-specific ones)
+        COMMON_RULES='{"matchUpdateTypes":["patch"],"automerge":false,"labels":["patch-update"]},{"matchDepTypes":["devDependencies"],"labels":["dev-dependencies"],"automerge":false}'
+        PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}$COMMON_RULES"
+
+        export RENOVATE_CONFIG="{\"\\$schema\":\"https://docs.renovatebot.com/renovate-schema.json\",\"extends\":[\"config:recommended\"],\"enabled\":true,\"timezone\":\"Europe/Paris\",\"automerge\":false,\"prHourlyLimit\":10,\"prConcurrentLimit\":5,\"ignorePaths\":[\".build/**\",\"**/node_modules/**\",\"**/Pods/**\"],\"osvVulnerabilityAlerts\":true,\"vulnerabilityAlerts\":{\"enabled\":true,\"labels\":[\"security\",\"vulnerability\",\"high-priority\"],\"prBodyNotes\":[\"**Severity:** {{{vulnerabilitySeverity}}}\",\"**CVEs:** {{{cveUrls}}}\"]}${MANAGERS:+,\"enabledManagers\":[$MANAGERS]},\"packageRules\":[$PACKAGE_RULES],\"commitMessagePrefix\":\"chore:\",\"commitMessageAction\":\"update\",\"commitMessageTopic\":\"{{depName}}\",\"commitMessageExtra\":\"to {{newVersion}}{{#if isVulnerabilityAlert}} (security){{/if}}\"}"
         echo "Using centralized inline Renovate config from CI template"
       fi
 
