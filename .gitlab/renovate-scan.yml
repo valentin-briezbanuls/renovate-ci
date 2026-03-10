@@ -262,6 +262,7 @@ renovate_run:
     RENOVATE_PLATFORM: gitlab
     RENOVATE_ENDPOINT: "$CI_SERVER_URL/api/v4/"
     RENOVATE_BASE_BRANCHES: "$CI_COMMIT_REF_NAME"
+    RENOVATE_GIT_AUTHOR: "Renovate Bot <renovate@isee-u.fr>"
     GITHUB_COM_TOKEN: "$GITHUB_COM_TOKEN"
     LOG_LEVEL: info
   before_script:
