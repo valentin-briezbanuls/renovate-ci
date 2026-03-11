@@ -393,9 +393,7 @@ trivy_vulnerability_scan:
 
 # ---------------------------------------------------------------------------
 # Stale renovate/* branch cleanup
-# Runs before Renovate to remove branches with no open MR older than
-# STALE_BRANCH_DAYS days (default: 7). Keeps the repository clean and avoids
-# Renovate re-opening already-abandoned update branches.
+# Runs before Renovate to remove ALL renovate/* branches that have no open MR.
 # Set SKIP_STALE_BRANCH_CLEANUP=true to disable this step.
 # ---------------------------------------------------------------------------
 cleanup_stale_renovate_branches:
@@ -412,32 +410,28 @@ cleanup_stale_renovate_branches:
       when: on_success
     - when: never
   variables:
-    STALE_BRANCH_DAYS: "7"
     SKIP_STALE_BRANCH_CLEANUP: "false"
   before_script:
     - apt-get update -qq
-    - apt-get install -y curl jq coreutils -qq
+    - apt-get install -y curl jq -qq
   script:
     - |
       if [ "${SKIP_STALE_BRANCH_CLEANUP}" = "true" ]; then
-        echo "SKIP_STALE_BRANCH_CLEANUP=true — skipping stale branch cleanup."
+        echo "SKIP_STALE_BRANCH_CLEANUP=true — skipping."
         exit 0
       fi
 
       if [ -z "${RENOVATE_TOKEN:-}" ]; then
-        echo "WARNING: RENOVATE_TOKEN not set — cannot authenticate with GitLab API. Skipping."
+        echo "WARNING: RENOVATE_TOKEN not set — skipping."
         exit 0
       fi
 
       API_BASE="${CI_API_V4_URL}"
       PROJECT_ID="${CI_PROJECT_ID}"
-      STALE_DAYS="${STALE_BRANCH_DAYS:-7}"
-      CUTOFF_TS=$(date -d "${STALE_DAYS} days ago" +%s 2>/dev/null || date -v -"${STALE_DAYS}"d +%s)
 
-      echo "=== Stale renovate/* branch cleanup ==="
+      echo "=== renovate/* branch cleanup ==="
       echo "Project : ${PROJECT_ID}"
-      echo "API base: ${API_BASE}"
-      echo "Stale threshold: ${STALE_DAYS} day(s) — branches committed before $(date -d "${STALE_DAYS} days ago" -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -v -"${STALE_DAYS}"d -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo "Rule    : delete all renovate/* branches with no open MR"
       echo ""
 
       # --- 1. Collect all renovate/* branches (paginated) ---
@@ -470,47 +464,31 @@ cleanup_stale_renovate_branches:
         PAGE=$((PAGE + 1))
       done
       echo "Open MR source branches: $(echo "${OPEN_MR_BRANCHES}" | jq 'length')"
+      echo ""
 
-      # --- 3. Evaluate each branch ---
+      # --- 3. Delete every renovate/* branch that has no open MR ---
       DELETED=0
       SKIPPED_MR=0
-      SKIPPED_RECENT=0
       ERRORS=0
 
       while IFS= read -r BRANCH_JSON; do
         NAME=$(echo "${BRANCH_JSON}" | jq -r '.name')
-        COMMITTED_RAW=$(echo "${BRANCH_JSON}" | jq -r '.commit.committed_date // .commit.authored_date // ""')
 
-        # Check open MR
         HAS_MR=$(echo "${OPEN_MR_BRANCHES}" | jq --arg b "${NAME}" 'any(. == $b)')
         if [ "${HAS_MR}" = "true" ]; then
-          echo "  KEEP   [open MR]   ${NAME}"
+          echo "  KEEP   [open MR] ${NAME}"
           SKIPPED_MR=$((SKIPPED_MR + 1))
           continue
         fi
 
-        # Parse committed date
-        if [ -z "${COMMITTED_RAW}" ]; then
-          echo "  KEEP   [no date]   ${NAME}"
-          SKIPPED_RECENT=$((SKIPPED_RECENT + 1))
-          continue
-        fi
-        COMMITTED_TS=$(date -d "${COMMITTED_RAW}" +%s 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%S%z" "${COMMITTED_RAW}" +%s 2>/dev/null || echo 0)
-
-        if [ "${COMMITTED_TS}" -ge "${CUTOFF_TS}" ]; then
-          echo "  KEEP   [too recent] ${NAME} (${COMMITTED_RAW})"
-          SKIPPED_RECENT=$((SKIPPED_RECENT + 1))
-          continue
-        fi
-
-        # Delete the stale branch
-        ENCODED_NAME=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "${NAME}" 2>/dev/null || echo "${NAME}" | sed 's|/|%2F|g')
+        ENCODED_NAME=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "${NAME}" 2>/dev/null \
+          || echo "${NAME}" | sed 's|/|%2F|g')
         HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE \
           --header "PRIVATE-TOKEN: ${RENOVATE_TOKEN}" \
           "${API_BASE}/projects/${PROJECT_ID}/repository/branches/${ENCODED_NAME}")
 
         if echo "${HTTP_CODE}" | grep -qE '^(2[0-9][0-9]|404)$'; then
-          echo "  DELETE             ${NAME} (committed ${COMMITTED_RAW}) → HTTP ${HTTP_CODE}"
+          echo "  DELETE ${NAME} → HTTP ${HTTP_CODE}"
           DELETED=$((DELETED + 1))
         else
           echo "  ERROR  [HTTP ${HTTP_CODE}] ${NAME}"
@@ -521,8 +499,7 @@ cleanup_stale_renovate_branches:
       echo ""
       echo "=== Summary ==="
       echo "  Deleted : ${DELETED}"
-      echo "  Skipped (open MR)  : ${SKIPPED_MR}"
-      echo "  Skipped (too recent): ${SKIPPED_RECENT}"
+      echo "  Kept (open MR): ${SKIPPED_MR}"
       echo "  Errors  : ${ERRORS}"
 
       [ "${ERRORS}" -gt 0 ] && exit 1 || exit 0
