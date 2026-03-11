@@ -1,7 +1,6 @@
 stages:
   - security
   - renovate
-  - cleanup
 
 include:
   - local: .gitlab/renovate-scan.yml

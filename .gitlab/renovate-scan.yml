@@ -17,7 +17,6 @@
 
 stages:
   - security
-  - cleanup
   - renovate
 
 # -- Lockfile lists (used in rules:exists to skip irrelevant scanners - so no trivy if project not iOS and vice-versa) ------
@@ -401,7 +400,7 @@ trivy_vulnerability_scan:
 # ---------------------------------------------------------------------------
 cleanup_stale_renovate_branches:
   image: ubuntu:noble
-  stage: cleanup
+  stage: .pre
   tags: [mac]
   allow_failure: true
   rules:
