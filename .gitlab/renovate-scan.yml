@@ -131,7 +131,7 @@ osv_vulnerability_scan:
   stage: security
   tags: [mac]
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "trigger" && $RUN_RENOVATE == "1"'
+    - if: '$CI_PIPELINE_SOURCE == "trigger" && $RUN_f == "1"'
       exists: *osv_lockfiles
       when: on_success
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
@@ -418,6 +418,7 @@ renovate_run:
     RENOVATE_PLATFORM: gitlab
     RENOVATE_ENDPOINT: "$CI_SERVER_URL/api/v4/"
     RENOVATE_BASE_BRANCHES: "${TARGET_BASE_BRANCH:-$CI_DEFAULT_BRANCH}"
+    RENOVATE_GIT_AUTHOR: "Renovate Bot <renovate@isee-u.fr>"
     RENOVATE_REPOSITORY_CACHE: "enabled"
     RENOVATE_CACHE_DIR: "${CI_PROJECT_DIR}/.renovate-cache"
     GITHUB_COM_TOKEN: "$GITHUB_COM_TOKEN"
