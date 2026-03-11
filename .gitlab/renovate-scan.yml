@@ -131,7 +131,7 @@ osv_vulnerability_scan:
   stage: security
   tags: [mac]
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "trigger" && $RUN_f == "1"'
+    - if: '$CI_PIPELINE_SOURCE == "trigger" && $RUN_RENOVATE == "1"'
       exists: *osv_lockfiles
       when: on_success
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
