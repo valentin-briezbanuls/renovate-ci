@@ -494,19 +494,25 @@ renovate_run:
     # --- Run Renovate --------------------------------------------------------
     - |
       # Dry-run mode: "lookup" only checks for updates (fast, no lockfile resolution),
-      # "full" simulates branches+commits (slow), "" applies changes for real.
-      # Default to lookup for dashboard triggers; respect RENOVATE_DRY_RUN override.
-      echo "RENOVATE_DRY_RUN='${RENOVATE_DRY_RUN:-}' (pipeline_source=$CI_PIPELINE_SOURCE)"
-      if [ "${RENOVATE_DRY_RUN:-}" = "full" ]; then
-        DRY_RUN="--dry-run=full"
-      elif [ "${RENOVATE_DRY_RUN:-}" = "false" ]; then
-        DRY_RUN=""
-      elif [ "$CI_PIPELINE_SOURCE" = "trigger" ]; then
-        DRY_RUN="--dry-run=lookup"
-      elif [ "$CI_PIPELINE_SOURCE" = "schedule" ]; then
-        DRY_RUN="--dry-run=lookup"
+      # "full" simulates branches+commits (slow), "false" applies changes for real.
+      # Default to lookup (safe); respect DRY_RUN_MODE override from CI variables.
+      # IMPORTANT: We use DRY_RUN_MODE (not RENOVATE_DRY_RUN) as input to avoid
+      # conflicts with Renovate's own RENOVATE_DRY_RUN env var.
+      DRY_RUN_INPUT="${DRY_RUN_MODE:-${RENOVATE_DRY_RUN:-}}"
+      echo "DRY_RUN_INPUT='${DRY_RUN_INPUT}' (pipeline_source=$CI_PIPELINE_SOURCE)"
+      if [ "${DRY_RUN_INPUT}" = "full" ]; then
+        DRY_RUN_FLAG="full"
+      elif [ "${DRY_RUN_INPUT}" = "false" ]; then
+        DRY_RUN_FLAG=""
       else
-        DRY_RUN="--dry-run=lookup"
+        DRY_RUN_FLAG="lookup"
+      fi
+      # Unset env var so Renovate only uses the CLI flag
+      unset RENOVATE_DRY_RUN
+      if [ -n "$DRY_RUN_FLAG" ]; then
+        DRY_RUN="--dry-run=$DRY_RUN_FLAG"
+      else
+        DRY_RUN=""
       fi
       echo "Renovate mode: ${DRY_RUN:-REAL (no dry-run)}"
 
