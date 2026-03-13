@@ -1,43 +1,43 @@
 # renovate-ci
 
-Templates centralisés pour Renovate + scan de vulnérabilités (OSV + Trivy).  
-Ce projet s'exécute sur le **GitLab self-hosted** et couvre les projets hébergés sur **GitLab** ou **GitHub**.
+Centralized templates for Renovate dependency updates + vulnerability scanning (OSV + Trivy).
+Runs on the **self-hosted GitLab instance** and covers projects hosted on **GitLab** or **GitHub**.
+
+---
+
+## How It Works
+
+Every scan run does, in order:
+
+1. **OSV Scanner** — detects vulnerabilities in all lockfiles (npm, gem, gradle, pip, cargo, go, composer…)
+2. **Trivy** — detects iOS/CocoaPods/SPM vulnerabilities (if `Podfile.lock`, `Package.resolved`, or `Cartfile.resolved` is present)
+3. **Renovate** — opens PRs/MRs to update dependencies; vulnerable packages are automatically prioritized using OSV + Trivy results
+4. **Combined report** — `combined-report.json` aggregates all results, consumed by the dashboard
 
 ---
 
 ## Architecture
 
-```
-renovate-ci/ (GitLab self-hosted — privé)
-├── .gitlab/renovate-scan.yml         ← inclus par les projets GitLab (même instance)
-├── .gitlab/renovate-scan-github.yml  ← déclenché par le dashboard pour les projets GitHub
-└── default.json                      ← config Renovate de référence
-```
+| Platform | Execution model | What the target project needs |
+|---|---|---|
+| GitLab (same self-hosted instance) | **Distributed** — logic runs on the target project's own runner | 3 lines in `.gitlab-ci.yml` + a CI variable |
+| GitHub (any repo) | **Centralized** — logic runs from `renovate-ci`'s runners on GitLab | Register in dashboard only |
 
-| Plateforme | Modèle d'exécution | Ce que fait le projet cible |
-|------------|--------------------|-----------------------------|
-| GitLab (même instance) | **Include** — la logique s'exécute dans le runner du projet cible | Ajouter 3 lignes dans `.gitlab-ci.yml` |
-| GitHub (tout projet) | **Centralisé** — la logique s'exécute depuis `renovate-ci` sur GitLab | S'enregistrer dans le dashboard |
-
-> **Propagation automatique** : aucun projet cible ne contient de copie de la logique.  
-> Toute modification dans `renovate-ci` s'applique immédiatement au prochain run.
+> **Automatic propagation**: no target project contains a copy of the logic.
+> Any change committed to `renovate-ci` takes effect immediately on the next run.
 
 ---
 
-## Ce que font les scans
+## Adding a GitLab Project
 
-Chaque run effectue, dans l'ordre :
+### Prerequisites
 
-1. **OSV Scanner** — détecte les vulnérabilités dans tous les lockfiles (npm, gem, gradle, pip, cargo, go, composer…)
-2. **Trivy** — détecte les vulnérabilités iOS/CocoaPods/SPM (si `Podfile.lock`, `Package.resolved` ou `Cartfile.resolved` est présent)
-3. **Renovate** — ouvre des PRs/MRs pour mettre à jour les dépendances ; les packages vulnérables sont priorisés automatiquement via les résultats OSV + Trivy
-4. **Rapport combiné** — `combined-report.json` agrège tous les résultats (consommé par le dashboard)
+- You have maintainer or owner access to the target GitLab project
+- The project is on the same self-hosted GitLab instance as `renovate-ci`
 
----
+### Step 1 — Add the include to `.gitlab-ci.yml`
 
-## Onboarding — Projet GitLab (même instance self-hosted)
-
-### 1. Ajouter l'include dans `.gitlab-ci.yml`
+In the **target project**, add these lines to `.gitlab-ci.yml` (create the file if it doesn't exist):
 
 ```yaml
 include:
@@ -46,52 +46,112 @@ include:
     file: '/.gitlab/renovate-scan.yml'
 ```
 
-### 2. Ajouter la variable CI/CD `RENOVATE_TOKEN`
+> Replace `internal-projects/renovate-ci` with the actual path of this project on your GitLab instance.
 
-**Settings → CI/CD → Variables → Add variable**
+### Step 2 — Add the `RENOVATE_TOKEN` CI variable
 
-| Champ | Valeur |
-|-------|--------|
+In the target project: **Settings → CI/CD → Variables → Add variable**
+
+| Field | Value |
+|---|---|
 | Key | `RENOVATE_TOKEN` |
-| Value | PAT GitLab avec scopes `api`, `read_repository`, `write_repository` |
-| Masked | ✅ Oui |
-| Protected | ❌ Non (pour fonctionner sur toutes les branches) |
+| Value | A GitLab Personal Access Token with scopes: `api`, `read_repository`, `write_repository` |
+| Masked | ✅ Yes |
+| Protected | ❌ No (so it works on all branches) |
 
-### 3. (Optionnel) Personnaliser la config Renovate
+This token is used by Renovate to read the project and open merge requests.
+It must belong to a user (or service account) with Developer access to the target project.
 
-Copier `default.json` à la racine du projet et le renommer `renovate.json`.  
-Si absent, la config centralisée est utilisée automatiquement.
+### Step 3 — Register in the dashboard
 
-### Déclencheurs disponibles
+Open the Renovate Dashboard and add a new project:
 
-| Source | Comportement |
-|--------|-------------|
-| Trigger pipeline (dashboard) avec `RUN_RENOVATE=1` | Run automatique complet |
-| Schedule GitLab | Run automatique complet |
-| Pipeline manuel (web) | Run manuel — demande confirmation |
+| Field | Value |
+|---|---|
+| Platform | `GitLab` |
+| Repository URL | Full URL of the project (e.g. `https://git.company.com/group/myproject`) |
+| Base branch | `main` (or your default branch) |
+
+The dashboard will automatically:
+- Resolve the GitLab project ID from the URL
+- Create a pipeline trigger token and store it
+- Set up webhooks for real-time job status
+
+### Step 4 — Run a scan
+
+Click **Run Renovate** in the dashboard. The first run uses **dry-run/lookup mode** by default (checks for updates without creating MRs). Switch to **full mode** when ready.
+
+### (Optional) Customize Renovate configuration
+
+Copy `default.json` from this repo to the root of the target project and rename it `renovate.json`.
+If absent, the centralized config is used automatically.
 
 ---
 
-## Onboarding — Projet GitHub
+## Adding a GitHub Project
 
-### 1. S'enregistrer dans le dashboard
+GitHub projects run scans **on their own GitHub Actions runners**. No code ever leaves the customer's infrastructure — only the scan results (`combined-report.json`) are sent back to the dashboard via webhook.
 
-Ouvrir le dashboard et ajouter le projet avec :
+### Prerequisites
 
-| Champ | Valeur |
-|-------|--------|
-| Platform | `github` |
-| Repository | `owner/repo` |
-| Base branch | ex: `main` |
+- You have a GitHub Personal Access Token (PAT) with:
+  - `repo` scope (for private repos: full read + write to open PRs)
+  - `public_repo` scope (for public repos only)
 
-Le dashboard utilise le token GitHub déjà configuré pour le groupe/utilisateur.
+### Step 1 — Register in the dashboard
 
-### 2. (Optionnel) Personnaliser la config Renovate
+Open the Renovate Dashboard and add a new project:
 
-Ajouter un `renovate.json` à la racine du projet GitHub.  
-Si absent, la config centralisée de `renovate-ci` est utilisée automatiquement.
+| Field | Value |
+|---|---|
+| Platform | `GitHub` |
+| Repository | `owner/repo` format (e.g. `myorg/myapp`) |
+| Base branch | `main` (or your default branch) |
 
-Exemple minimaliste :
+The dashboard will display a **Webhook URL** (e.g. `https://renovate.company.com/api/reports/<token>`). Copy it.
+
+### Step 2 — Add secrets to the GitHub repo
+
+In the target GitHub repository: **Settings → Secrets and variables → Actions → New repository secret**
+
+| Secret | Value |
+|---|---|
+| `RENOVATE_TOKEN` | A GitHub PAT with `repo` scope (used by Renovate to open PRs) |
+| `RENOVATE_DASHBOARD_WEBHOOK_URL` | The webhook URL from Step 1 |
+
+### Step 3 — Add the workflow file
+
+Create `.github/workflows/renovate.yml` in the target GitHub repository:
+
+```yaml
+name: Renovate
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 1'
+
+jobs:
+  renovate:
+    uses: <org>/renovate-ci/.github/workflows/renovate-scan.yml@main
+    secrets:
+      RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+      DASHBOARD_WEBHOOK_URL: ${{ secrets.RENOVATE_DASHBOARD_WEBHOOK_URL }}
+```
+
+> Replace `<org>/renovate-ci` with the actual GitHub path of this repository.
+
+### Step 4 — Run a scan
+
+Either:
+- Click **Run Renovate** in the dashboard (dispatches the workflow via GitHub API)
+- Trigger manually in GitHub: **Actions → Renovate → Run workflow**
+- Wait for the weekly schedule (`cron: '0 3 * * 1'`)
+
+The workflow runs OSV + Trivy scans, executes Renovate, builds `combined-report.json`, and POSTs it to the dashboard webhook. The first run uses **dry-run/lookup mode** by default.
+
+### (Optional) Customize Renovate configuration
+
+Add a `renovate.json` to the root of the GitHub repo:
 
 ```json
 {
@@ -101,67 +161,79 @@ Exemple minimaliste :
 }
 ```
 
-### Aucun fichier CI à ajouter
-
-Les projets GitHub n'ont **pas besoin** d'un workflow `.github/workflows/`.  
-Toute la logique s'exécute depuis les runners GitLab de `renovate-ci`.
+If absent, the centralized `default.json` from `renovate-ci` is used automatically.
 
 ---
 
-## Variables de déclenchement (dashboard → pipeline)
+## Dry-Run Modes
 
-### Projets GitLab
-
-| Variable | Description | Défaut |
-|----------|-------------|--------|
-| `RUN_RENOVATE` | Flag d'activation (`1`) | — |
-| `TARGET_REPO` | Chemin GitLab (`namespace/project`) | `$CI_PROJECT_PATH` |
-| `TARGET_BASE_BRANCH` | Branche principale | `$CI_DEFAULT_BRANCH` |
-| `DRY_RUN_MODE` | `lookup` / `full` / `false` | `lookup` |
-| `RENOVATE_TOKEN` | PAT GitLab (variable CI/CD du projet) | — |
-
-### Projets GitHub
-
-| Variable | Description | Défaut |
-|----------|-------------|--------|
-| `RUN_GITHUB` | Flag d'activation (`1`) | — |
-| `TARGET_REPO` | Dépôt GitHub (`owner/repo`) | — |
-| `TARGET_BASE_BRANCH` | Branche principale | `main` |
-| `DRY_RUN_MODE` | `lookup` / `full` / `false` | `lookup` |
-| `GITHUB_TOKEN` | PAT GitHub (masqué, géré par le dashboard) | — |
+| Mode | Behaviour | When to use |
+|---|---|---|
+| `lookup` | Checks what updates exist; no branches or PRs created | Default — safe first run |
+| `full` | Simulates branch creation (no actual commits) | Validate config before going live |
+| `false` | Full execution — creates real PRs/MRs | Production use |
 
 ---
 
-## Config Renovate de référence (`default.json`)
+## Supported Package Managers
 
-Écosystèmes couverts par défaut :
-
-| Manager | Écosystème |
-|---------|-----------|
+| Manager | Ecosystem |
+|---|---|
 | `cocoapods` | iOS / CocoaPods |
 | `swift` | iOS / Swift Package Manager |
-| `gradle` + `gradle-wrapper` | Android / Gradle |
+| `gradle` + `gradle-wrapper` | Android |
 | `npm` | Web / Node.js |
 | `bundler` | Ruby / Rails |
-| `pip_requirements` | Python / pip |
-
-Pour ajouter d'autres managers (`gomod`, `cargo`, `composer`, `pub`…), les définir dans le `renovate.json` du projet cible.
+| `pip_requirements` | Python |
+| `gomod`, `cargo`, `composer`, `pub` | Go, Rust, PHP, Dart (auto-detected if lockfiles present) |
 
 ---
 
-## Structure des fichiers
+## Dashboard Variables Reference
+
+### GitLab projects
+
+| Variable | Description | Default |
+|---|---|---|
+| `RUN_RENOVATE` | Activation flag (`1`) | — |
+| `TARGET_REPO` | GitLab path (`namespace/project`) | `$CI_PROJECT_PATH` |
+| `TARGET_BASE_BRANCH` | Main branch | `$CI_DEFAULT_BRANCH` |
+| `DRY_RUN_MODE` | `lookup` / `full` / `false` | `lookup` |
+| `RENOVATE_TOKEN` | GitLab PAT (set in the target project's CI variables) | — |
+
+### GitHub projects
+
+| Variable | Description | Default |
+|---|---|---|
+| `RUN_GITHUB` | Activation flag (`1`) | — |
+| `TARGET_REPO` | GitHub repo (`owner/repo`) | — |
+| `TARGET_BASE_BRANCH` | Main branch | `main` |
+| `DRY_RUN_MODE` | `lookup` / `full` / `false` | `lookup` |
+| `GITHUB_TOKEN` | GitHub PAT (masked, managed by dashboard) | — |
+
+---
+
+## Environment Variables Required on the Dashboard Server
+
+| Variable | Purpose |
+|---|---|
+| `GITLAB_API_BASE` | GitLab API endpoint (e.g. `https://git.company.com/api/v4`) |
+| `GITLAB_PRIVATE_TOKEN` | Admin GitLab PAT with `api` scope — used to download artifacts and trigger pipelines |
+| `RENOVATE_CI_PROJECT_ID` | GitLab project ID of this `renovate-ci` repo |
+| `RENOVATE_CI_TRIGGER_TOKEN` | Pipeline trigger token for `renovate-ci` (used to trigger GitHub scans) |
+| `WEBHOOK_BASE_URL` | Public URL where the dashboard receives webhooks |
+
+---
+
+## File Structure
 
 ```
 renovate-ci/
-├── .gitlab-ci.yml                        ← pipeline de renovate-ci (inclut les deux templates)
-├── default.json                          ← config Renovate de référence (unique source de vérité)
+├── .gitlab-ci.yml                    ← entry point: defines stages, includes both templates
+├── default.json                      ← reference Renovate config (single source of truth)
 ├── .gitlab/
-│   ├── renovate-scan.yml                 ← template inclus par les projets GitLab
-│   ├── renovate-scan-github.yml          ← template déclenché par le dashboard pour GitHub
-│   └── renovate.json                     ← DEPRECATED — doublon de default.json
-├── .github/
-│   └── workflows/
-│       └── renovate-scan.yml             ← DEPRECATED — remplacé par renovate-scan-github.yml
-└── PLAN.md                               ← plan d'architecture
+│   ├── renovate-scan.yml             ← template included by GitLab projects
+│   ├── renovate-scan-github.yml      ← template triggered by dashboard for GitHub projects
+│   └── renovate.json                 ← DEPRECATED — duplicate of default.json
+└── CLAUDE.md                         ← architecture notes for Claude Code
 ```
-
