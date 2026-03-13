@@ -224,21 +224,3 @@ If absent, the centralized `default.json` from `renovate-ci` is used automatical
 | `RENOVATE_CI_PROJECT_ID` | GitLab project ID of this `renovate-ci` repo |
 | `RENOVATE_CI_TRIGGER_TOKEN` | Pipeline trigger token for `renovate-ci` (used to trigger GitHub scans) |
 | `WEBHOOK_BASE_URL` | Public URL where the dashboard receives webhooks |
-
----
-
-## File Structure
-
-```
-renovate-ci/
-├── .gitlab-ci.yml                    ← entry point: defines stages, includes both templates
-├── default.json                      ← reference Renovate config (single source of truth)
-├── .github/
-│   └── workflows/
-│       └── renovate-scan.yml         ← reusable GitHub Actions workflow for GitHub projects
-├── .gitlab/
-│   ├── renovate-scan.yml             ← template included by GitLab projects
-│   ├── renovate-scan-github.yml      ← DEPRECATED — replaced by .github/workflows/renovate-scan.yml
-│   └── renovate.json                 ← DEPRECATED — duplicate of default.json
-└── CLAUDE.md                         ← architecture notes for Claude Code
-```
