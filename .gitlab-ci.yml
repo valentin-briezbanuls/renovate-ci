@@ -4,3 +4,4 @@ stages:
 
 include:
   - local: .gitlab/renovate-scan.yml
+  - local: .gitlab/renovate-scan-github.yml

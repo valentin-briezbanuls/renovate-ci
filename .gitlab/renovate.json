@@ -1,5 +1,6 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "_comment": "DEPRECATED — Ce fichier est un doublon de /default.json à la racine du projet. Utilisez default.json comme référence unique. Ce fichier sera supprimé dans une prochaine version.",
   "extends": ["config:recommended"],
   "enabled": true,
   "timezone": "Europe/Paris",
