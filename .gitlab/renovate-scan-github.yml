@@ -386,9 +386,10 @@ renovate_run_github:
         fi
       fi
     # Clone repo shallowly to access renovate.json and Package.resolved
-    - git clone --depth=1
-        "https://x-access-token:${GITHUB_TOKEN}@github.com/${TARGET_REPO}.git"
-        target-repo
+    - |
+      git clone --depth=1 \
+        "https://x-access-token:${GITHUB_TOKEN}@github.com/${TARGET_REPO}.git" \
+        target-repo \
         || echo "WARNING: Could not clone target repo for config/SPM lookup"
   script:
     - *perf_start
