@@ -21,7 +21,7 @@ Every scan run does, in order:
 | Platform | Execution model | What the target project needs |
 |---|---|---|
 | GitLab (same self-hosted instance) | **Distributed** — logic runs on the target project's own runner | 3 lines in `.gitlab-ci.yml` + a CI variable |
-| GitHub (any repo) | **Centralized** — logic runs from `renovate-ci`'s runners on GitLab | Register in dashboard only |
+| GitHub (any repo) | **Distributed** — reusable workflow runs on the customer's own GitHub Actions runners | Workflow file + 2 secrets |
 
 > **Automatic propagation**: no target project contains a copy of the logic.
 > Any change committed to `renovate-ci` takes effect immediately on the next run.
@@ -201,15 +201,17 @@ If absent, the centralized `default.json` from `renovate-ci` is used automatical
 | `DRY_RUN_MODE` | `lookup` / `full` / `false` | `lookup` |
 | `RENOVATE_TOKEN` | GitLab PAT (set in the target project's CI variables) | — |
 
-### GitHub projects
+### GitHub projects (workflow inputs)
 
-| Variable | Description | Default |
+| Input | Description | Default |
 |---|---|---|
-| `RUN_GITHUB` | Activation flag (`1`) | — |
-| `TARGET_REPO` | GitHub repo (`owner/repo`) | — |
-| `TARGET_BASE_BRANCH` | Main branch | `main` |
-| `DRY_RUN_MODE` | `lookup` / `full` / `false` | `lookup` |
-| `GITHUB_TOKEN` | GitHub PAT (masked, managed by dashboard) | — |
+| `target_base_branch` | Base branch to scan | `main` |
+| `dry_run_mode` | `lookup` / `full` / `false` | `lookup` |
+
+| Secret | Description |
+|---|---|
+| `RENOVATE_TOKEN` | GitHub PAT with `repo` scope |
+| `DASHBOARD_WEBHOOK_URL` | Webhook URL provided by the dashboard |
 
 ---
 
@@ -231,9 +233,12 @@ If absent, the centralized `default.json` from `renovate-ci` is used automatical
 renovate-ci/
 ├── .gitlab-ci.yml                    ← entry point: defines stages, includes both templates
 ├── default.json                      ← reference Renovate config (single source of truth)
+├── .github/
+│   └── workflows/
+│       └── renovate-scan.yml         ← reusable GitHub Actions workflow for GitHub projects
 ├── .gitlab/
 │   ├── renovate-scan.yml             ← template included by GitLab projects
-│   ├── renovate-scan-github.yml      ← template triggered by dashboard for GitHub projects
+│   ├── renovate-scan-github.yml      ← DEPRECATED — replaced by .github/workflows/renovate-scan.yml
 │   └── renovate.json                 ← DEPRECATED — duplicate of default.json
 └── CLAUDE.md                         ← architecture notes for Claude Code
 ```
