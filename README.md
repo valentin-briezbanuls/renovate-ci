@@ -132,13 +132,13 @@ on:
 
 jobs:
   renovate:
-    uses: <org>/renovate-ci/.github/workflows/renovate-scan.yml@main
+    uses: valentin-briezbanuls/renovate-ci/.github/workflows/renovate-scan.yml@main
     secrets:
       RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
       DASHBOARD_WEBHOOK_URL: ${{ secrets.RENOVATE_DASHBOARD_WEBHOOK_URL }}
 ```
 
-> Replace `<org>/renovate-ci` with the actual GitHub path of this repository.
+> Replace `valentin-briezbanuls/renovate-ci` with the actual GitHub path of this repository.
 
 ### Step 4 — Run a scan
 

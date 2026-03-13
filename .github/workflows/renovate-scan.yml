@@ -13,7 +13,7 @@
 #       - cron: '0 3 * * 1'
 #   jobs:
 #     renovate:
-#       uses: <org>/renovate-ci/.github/workflows/renovate-scan.yml@main
+#       uses: valentin-briezbanuls/renovate-ci/.github/workflows/renovate-scan.yml@main
 #       secrets:
 #         RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
 #         DASHBOARD_WEBHOOK_URL: ${{ secrets.RENOVATE_DASHBOARD_WEBHOOK_URL }}
