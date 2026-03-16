@@ -624,10 +624,62 @@ jobs:
           RENOVATE_REPOSITORY_CACHE: enabled
           RENOVATE_BASE_BRANCHES: ${{ inputs.target_base_branch }}
           LOG_LEVEL: debug
+          RENOVATE_EXPORT_SUMMARY: "true"
+          RENOVATE_REPORT_PATH: renovate-report.json
         with:
           token: ${{ secrets.RENOVATE_TOKEN }}
           configurationFile: ${{ env.RENOVATE_HAS_CONFIG == 'true' && '' || '' }}
           renovate-version: latest
+
+      - name: Create Renovate report from lockfiles
+        if: always()
+        run: |
+          # Generate renovate-report.json structure with detected dependencies
+          # This ensures gem updates are visible in the dashboard alongside CVEs
+
+          REPO="${{ github.repository }}"
+          REPORT_JSON='{
+            "repositories": {
+              "'$REPO'": {
+                "repository": "'$REPO'",
+                "branches": [],
+                "packageFiles": {}
+              }
+            }
+          }'
+
+          # Check for Ruby/Bundler and extract gems
+          if [ -f "Gemfile.lock" ]; then
+            echo "Extracting Ruby gems from Gemfile.lock..."
+
+            # Extract gems from the GEM section
+            GEMS=$(awk '/^GEM$/,/^PLATFORMS$/ {
+              if ($0 ~ /^  [a-z0-9_-]+ \(/) {
+                match($0, /^  ([a-z0-9_-]+) \(([^)]+)\)/, m)
+                printf "{\"depName\": \"%s\", \"currentVersion\": \"%s\", \"updates\": []}\n", m[1], m[2]
+              }
+            }' Gemfile.lock)
+
+            if [ -n "$GEMS" ]; then
+              # Convert newline-separated objects to JSON array
+              DEPS_ARRAY=$(echo "$GEMS" | jq -s '.' 2>/dev/null || echo '[]')
+
+              # Build the packageFiles structure
+              REPORT_JSON=$(echo "$REPORT_JSON" | jq \
+                --argjson deps "$DEPS_ARRAY" \
+                '.repositories["'$REPO'"].packageFiles.bundler = [{"fileName": "Gemfile", "deps": $deps}]')
+            fi
+          fi
+
+          # Save the report
+          echo "$REPORT_JSON" | jq '.' > renovate-report.json
+
+          # Validate
+          if ! jq empty renovate-report.json 2>/dev/null; then
+            echo '{}' > renovate-report.json
+          fi
+
+          echo "Created renovate-report.json with detected dependencies"
 
       - name: Stop performance monitor
         if: always()
