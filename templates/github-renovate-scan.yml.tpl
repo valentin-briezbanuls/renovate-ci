@@ -213,7 +213,11 @@ jobs:
               . /tmp/ci-env-exports.sh
             fi
 
-            RENOVATE_CONFIG="{\"\$schema\":\"https://docs.renovatebot.com/renovate-schema.json\",\"extends\":[\"config:recommended\"],\"enabled\":true,\"timezone\":\"Europe/Paris\",\"automerge\":false,\"prHourlyLimit\":10,\"prConcurrentLimit\":5,\"ignorePaths\":[\".build/**\",\"**/node_modules/**\",\"**/Pods/**\"],\"osvVulnerabilityAlerts\":true,\"vulnerabilityAlerts\":{\"enabled\":true,\"labels\":[\"security\",\"vulnerability\",\"high-priority\"]},\"dependencyDashboard\":true,\"reportTags\":[\"security\"],\"rangeStrategy\":\"auto\"${MANAGERS:+,\"enabledManagers\":[$MANAGERS]},\"packageRules\":[$PACKAGE_RULES],\"commitMessagePrefix\":\"chore:\",\"commitMessageAction\":\"update\",\"commitMessageTopic\":\"{{depName}}\",\"commitMessageExtra\":\"to {{newVersion}}{{#if isVulnerabilityAlert}} (security){{/if}}\"}"
+            RENOVATE_CONFIG='{"$schema":"https://docs.renovatebot.com/renovate-schema.json","extends":["config:recommended"],"enabled":true,"timezone":"Europe/Paris","automerge":false,"prHourlyLimit":10,"prConcurrentLimit":5,"ignorePaths":[".build/**","**/node_modules/**","**/Pods/**"],"osvVulnerabilityAlerts":true,"vulnerabilityAlerts":{"enabled":true,"labels":["security","vulnerability","high-priority"]},"dependencyDashboard":true,"reportTags":["security"],"rangeStrategy":"auto",'
+            if [ -n "$MANAGERS" ]; then
+              RENOVATE_CONFIG="${RENOVATE_CONFIG}\"enabledManagers\":[$MANAGERS],"
+            fi
+            RENOVATE_CONFIG="${RENOVATE_CONFIG}\"packageRules\":[$PACKAGE_RULES],\"commitMessagePrefix\":\"chore:\",\"commitMessageAction\":\"update\",\"commitMessageTopic\":\"{{depName}}\",\"commitMessageExtra\":\"to {{newVersion}}{{#if isVulnerabilityAlert}} (security){{/if}}\"}"
             echo "RENOVATE_CONFIG=$RENOVATE_CONFIG" >> "$GITHUB_ENV"
             echo "Using centralized inline Renovate config (no renovate.json found in target repo)"
           fi
