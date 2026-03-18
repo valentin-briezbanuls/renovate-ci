@@ -852,7 +852,7 @@ jobs:
                 --slurpfile osv_perf osv-perf-metrics.json \
                 --slurpfile trivy_perf trivy-perf-metrics.json \
                 --arg timestamp "$(date -u -Iseconds)" \
-                --arg run_id "${{ github.run_id }}" \
+                --arg pipeline_id "${{ github.run_id }}" \
                 --arg commit_sha "${{ github.sha }}" \
                 --arg branch "${{ inputs.target_base_branch }}" \
                 --arg target_repo "${{ github.repository }}" \
