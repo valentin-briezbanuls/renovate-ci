@@ -246,6 +246,12 @@ jobs:
           fi
           echo "Renovate dry-run mode: ${DRY_RUN_INPUT}"
 
+      - name: Set target repository for Renovate
+        run: |
+          REPO="${{ github.repository }}"
+          echo "RENOVATE_REPOSITORIES=$REPO" >> "$GITHUB_ENV"
+          echo "Renovate will scan: $REPO"
+
       - name: Run Renovate
         uses: renovatebot/github-action@v46.1.5
         env:
