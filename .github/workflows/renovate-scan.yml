@@ -1,4 +1,8 @@
 # =============================================================================
+# GENERATED FILE — do not edit directly.
+# Source: templates/github-renovate-scan.yml.tpl + scripts/shared/
+# Regenerate: bash scripts/generate.sh
+# =============================================================================
 # Reusable GitHub Actions workflow — Renovate + OSV/Trivy scan
 # =============================================================================
 # Customer repos call this with `uses:`. All scanning runs on the customer's
@@ -127,12 +131,16 @@ jobs:
             if ! find . -name "gradle.lockfile" -maxdepth 3 2>/dev/null | grep -q .; then
               echo "Gradle project detected without lockfiles — parsing build files for OSV scan..."
               ALL_DEPS=$(mktemp)
-
+          
+              # ---- Strategy 1: Parse version catalog (libs.versions.toml) --------
               TOML_FILE=$(find . -maxdepth 3 -path "*/gradle/libs.versions.toml" 2>/dev/null | head -1)
               if [ -n "$TOML_FILE" ]; then
                 echo "Found version catalog: $TOML_FILE"
+                # Single awk pass: parse [versions] and [libraries], resolve and emit group:artifact:version
+                # Compatible with mawk (no gawk capture groups) for ubuntu:noble
                 awk '
-                  function extract(s, key,    idx, rest, val) {
+                  function extract(s, key,    pat, idx, rest, val) {
+                    # Extract value for key = "..." from an inline table string
                     idx = index(s, key)
                     if (idx == 0) return ""
                     rest = substr(s, idx + length(key))
@@ -145,16 +153,19 @@ jobs:
                     gsub(/^[[:space:]]*"/, "", s); gsub(/"[[:space:]]*$/, "", s)
                     return s
                   }
+          
                   /^\[versions\]/      { section="versions"; next }
                   /^\[libraries\]/     { section="libraries"; next }
                   /^\[/                { section=""; next }
                   /^#/ || /^[[:space:]]*$/ { next }
+          
                   section=="versions" {
                     split($0, kv, "=")
                     key = kv[1]; gsub(/[[:space:]]/, "", key)
                     val = ""; for (i=2; i<=length(kv); i++) { val = val (i>2?"=":"") kv[i] }
                     gsub(/^[[:space:]]*/, "", val); gsub(/[[:space:]]*$/, "", val)
                     if (val ~ /^\{/) {
+                      # { strictly = "x" } or { prefer = "x" } — grab first quoted value
                       match(val, /"[^"]*"/)
                       val = substr(val, RSTART+1, RLENGTH-2)
                     } else {
@@ -163,17 +174,22 @@ jobs:
                     versions[key] = val
                     next
                   }
+          
                   section=="libraries" {
                     split($0, kv, "=")
                     key = kv[1]; gsub(/[[:space:]]/, "", key)
                     val = ""; for (i=2; i<=length(kv); i++) { val = val (i>2?"=":"") kv[i] }
                     gsub(/^[[:space:]]*/, "", val); gsub(/[[:space:]]*$/, "", val)
+          
                     group=""; artifact=""; version=""
+          
                     if (val ~ /^"[^"]*"$/) {
+                      # Short notation: "group:artifact:version"
                       tmp = unquote(val)
                       split(tmp, parts, ":")
                       if (length(parts) >= 3) { group=parts[1]; artifact=parts[2]; version=parts[3] }
                     } else {
+                      # Inline table with module or group+name
                       mod = extract(val, "module")
                       if (mod != "") {
                         split(mod, mp, ":")
@@ -189,6 +205,7 @@ jobs:
                         version = extract(val, "version")
                       }
                     }
+          
                     if (group != "" && artifact != "" && version != "") {
                       print group ":" artifact ":" version
                     }
@@ -196,28 +213,33 @@ jobs:
                 ' "$TOML_FILE" >> "$ALL_DEPS"
                 echo "Extracted $(wc -l < "$ALL_DEPS" | tr -d ' ') dependencies from version catalog"
               fi
-
+          
+              # ---- Strategy 2: Parse build.gradle for inline coordinates ---------
               VARS_FILE=$(mktemp)
               for bf in $(find . -maxdepth 3 \( -name "build.gradle" -o -name "build.gradle.kts" \) 2>/dev/null); do
                 sed -n "s/.*ext\.\([a-zA-Z_][a-zA-Z0-9_]*\)\s*=\s*[\"']\([^\"']*\)[\"'].*/\1=\2/p" "$bf" >> "$VARS_FILE"
                 sed -n "s/.*\bdef\s\+\([a-zA-Z_][a-zA-Z0-9_]*\)\s*=\s*[\"']\([^\"']*\)[\"'].*/\1=\2/p" "$bf" >> "$VARS_FILE"
                 sed -n "s/.*\bval\s\+\([a-zA-Z_][a-zA-Z0-9_]*\)\s*=\s*[\"']\([^\"']*\)[\"'].*/\1=\2/p" "$bf" >> "$VARS_FILE"
               done
-
+          
               for bf in $(find . -maxdepth 3 \( -name "build.gradle" -o -name "build.gradle.kts" \) 2>/dev/null); do
                 DEPS_FILE=$(mktemp)
+          
                 grep -E "^\s*(implementation|api|kapt|ksp|compileOnly|runtimeOnly|annotationProcessor|testImplementation|androidTestImplementation|classpath)" "$bf" \
                   | grep -oE "\"[a-zA-Z0-9._-]+:[a-zA-Z0-9._-]+:[^\"]*\"|'[a-zA-Z0-9._-]+:[a-zA-Z0-9._-]+:[^']*'" \
                   | sed "s/^[\"']//;s/[\"']$//" > "$DEPS_FILE" || true
+          
                 while IFS='=' read -r vname vvalue; do
                   [ -z "$vname" ] && continue
                   sed -i "s/\\\$$vname/$vvalue/g;s/\${$vname}/$vvalue/g" "$DEPS_FILE" 2>/dev/null || true
                 done < "$VARS_FILE"
+          
                 grep -E '^[a-zA-Z0-9._-]+:[a-zA-Z0-9._-]+:[a-zA-Z0-9._+-]+$' "$DEPS_FILE" >> "$ALL_DEPS" || true
                 rm -f "$DEPS_FILE"
               done
               rm -f "$VARS_FILE"
-
+          
+              # ---- Write synthetic lockfile at project root ----------------------
               RESOLVED=$(sort -u "$ALL_DEPS")
               if [ -n "$RESOLVED" ]; then
                 {
@@ -226,6 +248,8 @@ jobs:
                   echo "empty="
                 } > gradle.lockfile
                 echo "Generated gradle.lockfile ($(echo "$RESOLVED" | wc -l | tr -d ' ') dependencies)"
+              else
+                echo "WARNING: No Gradle dependencies could be extracted"
               fi
               rm -f "$ALL_DEPS"
             fi
@@ -237,21 +261,23 @@ jobs:
           /usr/local/bin/osv-scanner scan source --format=json --output=osv-report.json -r .
           OSV_EXIT_CODE=$?
           set -e
-
+          
+          # 0 = no vulns, 1 = vulns found (OK), >1 = scanner error
           if [ $OSV_EXIT_CODE -gt 1 ] && [ $OSV_EXIT_CODE -ne 128 ]; then
             echo "WARNING: OSV scanner returned error code $OSV_EXIT_CODE"
           fi
-
+          
           if [ ! -f osv-report.json ]; then
             echo '{"results":[]}' > osv-report.json
           fi
-
+          
           echo "OSV scan completed (exit code: $OSV_EXIT_CODE)"
 
       - name: Stop performance monitor
         if: always()
         run: |
-          PERF_OUTPUT="osv-perf-metrics.json"
+          PERF_OUTPUT_FILE=osv-perf-metrics.json
+          PERF_OUTPUT="${PERF_OUTPUT_FILE:-perf-metrics.json}"
           if [ -f /tmp/perf-monitor.pid ]; then
             PERF_PID=$(cat /tmp/perf-monitor.pid)
             kill "$PERF_PID" 2>/dev/null || true
@@ -265,7 +291,7 @@ jobs:
             else
               echo '[]' > "$PERF_OUTPUT"
             fi
-            echo "Collected $(jq 'length' "$PERF_OUTPUT" 2>/dev/null || echo 0) performance samples"
+            echo "Collected $(jq 'length' "$PERF_OUTPUT" 2>/dev/null || echo 0) performance samples in $PERF_OUTPUT"
           else
             echo '[]' > "$PERF_OUTPUT"
             echo "No performance metrics collected"
@@ -366,24 +392,46 @@ jobs:
 
           if [ "$HAS_IOS" = "true" ]; then
             curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin latest
-
+            
             set +e
             trivy fs --scanners vuln --format json --output trivy-report.json .
             TRIVY_EXIT_CODE=$?
             set -e
-
+            
+            # Keep pipeline resilient: report generation should continue even if Trivy errors.
             if [ $TRIVY_EXIT_CODE -ne 0 ]; then
               echo "WARNING: Trivy returned exit code $TRIVY_EXIT_CODE"
             fi
-
+            
             if [ ! -f trivy-report.json ]; then
               echo '{"Results":[]}' > trivy-report.json
             fi
-
-            TRIVY_VULN_COUNT=$(jq -r '[(.Results[]? | (.Vulnerabilities // .vulnerabilities // [])[]), (.results[]? | (.Vulnerabilities // .vulnerabilities // [])[]) ] | length' trivy-report.json 2>/dev/null || echo 0)
-            TRIVY_PKG_COUNT=$(jq -r '[(.Results[]? | (.Vulnerabilities // .vulnerabilities // [])[]? | .PkgName), (.results[]? | (.Vulnerabilities // .vulnerabilities // [])[]? | .PkgName)] | map(select(. != null and . != "")) | unique | length' trivy-report.json 2>/dev/null || echo 0)
+            
+            # Print an explicit summary so logs prove package extraction works.
+            TRIVY_VULN_COUNT=$(jq -r '
+              [
+                (.Results[]? | (.Vulnerabilities // .vulnerabilities // [])[]?),
+                (.results[]? | (.Vulnerabilities // .vulnerabilities // [])[]?)
+              ] | flatten | length
+            ' trivy-report.json 2>/dev/null || echo 0)
+            TRIVY_PKG_COUNT=$(jq -r '
+              [
+                (.Results[]? | (.Vulnerabilities // .vulnerabilities // [])[]? | .PkgName),
+                (.results[]? | (.Vulnerabilities // .vulnerabilities // [])[]? | .PkgName)
+              ] | flatten | map(select(. != null and . != "")) | unique | length
+            ' trivy-report.json 2>/dev/null || echo 0)
             echo "Trivy vulnerable packages detected: $TRIVY_PKG_COUNT"
             echo "Trivy vulnerabilities detected: $TRIVY_VULN_COUNT"
+            if [ "$TRIVY_PKG_COUNT" -gt 0 ]; then
+              echo "Trivy sample vulnerable packages (max 10):"
+              jq -r '
+                [
+                  (.Results[]? | (.Vulnerabilities // .vulnerabilities // [])[]? | .PkgName),
+                  (.results[]? | (.Vulnerabilities // .vulnerabilities // [])[]? | .PkgName)
+                ] | flatten | map(select(. != null and . != "")) | unique | .[:10][]
+              ' trivy-report.json 2>/dev/null || true
+            fi
+            
             echo "Trivy scan completed (exit code: $TRIVY_EXIT_CODE)"
           else
             echo "No iOS lockfiles detected — skipping Trivy scan."
@@ -393,7 +441,8 @@ jobs:
       - name: Stop performance monitor
         if: always()
         run: |
-          PERF_OUTPUT="trivy-perf-metrics.json"
+          PERF_OUTPUT_FILE=trivy-perf-metrics.json
+          PERF_OUTPUT="${PERF_OUTPUT_FILE:-perf-metrics.json}"
           if [ -f /tmp/perf-monitor.pid ]; then
             PERF_PID=$(cat /tmp/perf-monitor.pid)
             kill "$PERF_PID" 2>/dev/null || true
@@ -407,7 +456,7 @@ jobs:
             else
               echo '[]' > "$PERF_OUTPUT"
             fi
-            echo "Collected $(jq 'length' "$PERF_OUTPUT" 2>/dev/null || echo 0) performance samples"
+            echo "Collected $(jq 'length' "$PERF_OUTPUT" 2>/dev/null || echo 0) performance samples in $PERF_OUTPUT"
           else
             echo '[]' > "$PERF_OUTPUT"
             echo "No performance metrics collected"
@@ -518,32 +567,44 @@ jobs:
         run: |
           OSV_PACKAGES=""
           TRIVY_PACKAGES=""
-
+          
           if [ -f osv-report.json ]; then
             OSV_PACKAGES=$(jq -r '.results[]?.packages[]? | select(.vulnerabilities | length > 0) | .package.name // empty' osv-report.json 2>/dev/null | sort -u)
           fi
-
+          
           if [ -f trivy-report.json ]; then
             TRIVY_PACKAGES=$(jq -r '
               [
                 (.Results[]? | (.Vulnerabilities // .vulnerabilities // [])[]? | .PkgName),
                 (.results[]? | (.Vulnerabilities // .vulnerabilities // [])[]? | .PkgName)
               ]
-              | flatten | .[]? | select(. != null and . != "")
+              | flatten
+              | .[]?
+              | select(. != null and . != "")
             ' trivy-report.json 2>/dev/null | sort -u)
           fi
-
+          
           VULNERABLE_PACKAGES=$(printf "%s\n%s\n" "$OSV_PACKAGES" "$TRIVY_PACKAGES" | sed '/^$/d' | sort -u)
-          echo "OSV vulnerable packages: $(printf "%s\n" "$OSV_PACKAGES" | sed '/^$/d' | wc -l | tr -d ' ')"
-          echo "Trivy vulnerable packages: $(printf "%s\n" "$TRIVY_PACKAGES" | sed '/^$/d' | wc -l | tr -d ' ')"
-          echo "Merged vulnerable packages: $(printf "%s\n" "$VULNERABLE_PACKAGES" | sed '/^$/d' | wc -l | tr -d ' ')"
-
+          echo "OSV vulnerable packages count: $(printf "%s\n" "$OSV_PACKAGES" | sed '/^$/d' | wc -l | tr -d ' ')"
+          echo "Trivy vulnerable packages count: $(printf "%s\n" "$TRIVY_PACKAGES" | sed '/^$/d' | wc -l | tr -d ' ')"
+          echo "Merged vulnerable packages count: $(printf "%s\n" "$VULNERABLE_PACKAGES" | sed '/^$/d' | wc -l | tr -d ' ')"
+          
           if [ -n "$VULNERABLE_PACKAGES" ]; then
+            VULNERABLE_PACKAGES_CSV=$(printf "%s\n" "$VULNERABLE_PACKAGES" | paste -sd, -)
+            echo "Vulnerable packages detected: $VULNERABLE_PACKAGES_CSV"
+          
             PACKAGE_ARRAY_JSON=$(printf "%s\n" "$VULNERABLE_PACKAGES" | jq -Rsc 'split("\n") | map(select(length > 0))')
-            PACKAGE_RULES=$(jq -nc \
+            RENOVATE_PACKAGE_RULES=$(jq -nc \
               --argjson pkgs "$PACKAGE_ARRAY_JSON" \
               '[{"matchPackageNames":$pkgs,"labels":["security","high-priority"],"prPriority":10}]')
-            echo "RENOVATE_PACKAGE_RULES=$PACKAGE_RULES" >> "$GITHUB_ENV"
+            echo "RENOVATE_PACKAGE_RULES=$RENOVATE_PACKAGE_RULES" > /tmp/ci-env-exports.sh
+          fi
+          # Import env vars from shared script (GitHub: write to $GITHUB_ENV)
+          if [ -f /tmp/ci-env-exports.sh ]; then
+            while IFS='=' read -r key value; do
+              [ -z "$key" ] && continue
+              echo "$key=$value" >> "$GITHUB_ENV"
+            done < /tmp/ci-env-exports.sh
           fi
 
       - name: Detect managers and build Renovate config
@@ -561,40 +622,97 @@ jobs:
           if [ -n "$FOUND_CONFIG" ]; then
             echo "RENOVATE_HAS_CONFIG=true" >> "$GITHUB_ENV"
           else
-            # Auto-detect managers and build inline config
+            # Auto-detect relevant package managers based on files present
             MANAGERS=""
             PACKAGE_RULES=""
-
-            [ -f Podfile ] || [ -f Podfile.lock ] && \
-              MANAGERS="${MANAGERS:+$MANAGERS,}\"cocoapods\"" && \
-              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group iOS CocoaPods updates\",\"matchManagers\":[\"cocoapods\"],\"groupName\":\"iOS CocoaPods dependencies\",\"labels\":[\"dependencies\",\"automated\",\"ios\",\"cocoapods\"]}" || true
-            [ -f Package.swift ] || [ -f Package.resolved ] && \
-              MANAGERS="${MANAGERS:+$MANAGERS,}\"swift\"" && \
-              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group iOS SPM updates\",\"matchManagers\":[\"swift\"],\"groupName\":\"iOS Swift Package Manager dependencies\",\"labels\":[\"dependencies\",\"automated\",\"ios\",\"spm\"]}" || true
-            ([ -f build.gradle ] || [ -f build.gradle.kts ]) && \
-              MANAGERS="${MANAGERS:+$MANAGERS,}\"gradle\",\"gradle-wrapper\"" && \
-              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group Android Gradle updates\",\"matchManagers\":[\"gradle\",\"gradle-wrapper\"],\"groupName\":\"Android Gradle dependencies\",\"labels\":[\"dependencies\",\"automated\",\"android\",\"gradle\"]}" || true
-            ([ -f package.json ] || [ -f yarn.lock ] || [ -f pnpm-lock.yaml ]) && \
-              MANAGERS="${MANAGERS:+$MANAGERS,}\"npm\"" && \
-              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group npm updates\",\"matchManagers\":[\"npm\"],\"groupName\":\"Web npm dependencies\",\"labels\":[\"dependencies\",\"automated\",\"web\",\"npm\"]}" || true
-            ([ -f Gemfile ] || [ -f Gemfile.lock ]) && \
-              MANAGERS="${MANAGERS:+$MANAGERS,}\"bundler\"" && \
-              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group Ruby updates\",\"matchManagers\":[\"bundler\"],\"groupName\":\"Web Ruby dependencies\",\"labels\":[\"dependencies\",\"automated\",\"web\",\"ruby\",\"bundler\"]}" || true
-            ([ -f requirements.txt ] || [ -f poetry.lock ]) && \
-              MANAGERS="${MANAGERS:+$MANAGERS,}\"pip_requirements\"" && \
-              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group pip updates\",\"matchManagers\":[\"pip_requirements\"],\"groupName\":\"Python pip dependencies\",\"labels\":[\"dependencies\",\"automated\",\"python\",\"pip\"]}" || true
-            ([ -f go.mod ] || [ -f go.sum ]) && \
-              MANAGERS="${MANAGERS:+$MANAGERS,}\"gomod\"" && \
-              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group Go updates\",\"matchManagers\":[\"gomod\"],\"groupName\":\"Go module dependencies\",\"labels\":[\"dependencies\",\"automated\",\"go\"]}" || true
-            ([ -f Cargo.toml ] || [ -f Cargo.lock ]) && \
-              MANAGERS="${MANAGERS:+$MANAGERS,}\"cargo\"" && \
-              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group Cargo updates\",\"matchManagers\":[\"cargo\"],\"groupName\":\"Rust Cargo dependencies\",\"labels\":[\"dependencies\",\"automated\",\"rust\",\"cargo\"]}" || true
-            ([ -f pubspec.yaml ] || [ -f pubspec.lock ]) && \
-              MANAGERS="${MANAGERS:+$MANAGERS,}\"pub\"" && \
-              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group Dart updates\",\"matchManagers\":[\"pub\"],\"groupName\":\"Flutter Dart dependencies\",\"labels\":[\"dependencies\",\"automated\",\"dart\",\"pub\"]}" || true
-
-            COMMON_RULES='{"matchPackagePatterns":["*"],"isVulnerabilityAlert":true,"groupName":"Security updates","groupSlug":"security","labels":["security","high-priority"]},{"matchUpdateTypes":["patch"],"automerge":false,"labels":["patch-update"]},{"matchDepTypes":["devDependencies"],"labels":["dev-dependencies"],"automerge":false}'
+            if [ -f Podfile ] || [ -f Podfile.lock ]; then
+              MANAGERS="${MANAGERS:+$MANAGERS,}\"cocoapods\""
+              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group iOS CocoaPods updates\",\"matchManagers\":[\"cocoapods\"],\"groupName\":\"iOS CocoaPods dependencies\",\"labels\":[\"dependencies\",\"automated\",\"ios\",\"cocoapods\"]}"
+            fi
+            if [ -f Package.swift ] || [ -f Package.resolved ]; then
+              MANAGERS="${MANAGERS:+$MANAGERS,}\"swift\""
+              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group iOS SPM updates\",\"matchManagers\":[\"swift\"],\"groupName\":\"iOS Swift Package Manager dependencies\",\"labels\":[\"dependencies\",\"automated\",\"ios\",\"spm\"]}"
+            fi
+            if [ -f build.gradle ] || [ -f build.gradle.kts ] || find . -maxdepth 2 -name "build.gradle*" 2>/dev/null | grep -q .; then
+              MANAGERS="${MANAGERS:+$MANAGERS,}\"gradle\",\"gradle-wrapper\""
+              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group Android Gradle updates\",\"matchManagers\":[\"gradle\",\"gradle-wrapper\"],\"groupName\":\"Android Gradle dependencies\",\"labels\":[\"dependencies\",\"automated\",\"android\",\"gradle\"]}"
+            fi
+            if [ -f package.json ] || [ -f package-lock.json ] || [ -f yarn.lock ] || [ -f pnpm-lock.yaml ]; then
+              MANAGERS="${MANAGERS:+$MANAGERS,}\"npm\""
+              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group npm updates\",\"matchManagers\":[\"npm\"],\"groupName\":\"Web npm dependencies\",\"labels\":[\"dependencies\",\"automated\",\"web\",\"npm\"]}"
+            fi
+            if [ -f Gemfile ] || [ -f Gemfile.lock ]; then
+              MANAGERS="${MANAGERS:+$MANAGERS,}\"bundler\""
+              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group Ruby/Rails updates\",\"matchManagers\":[\"bundler\"],\"groupName\":\"Web Ruby dependencies\",\"labels\":[\"dependencies\",\"automated\",\"web\",\"ruby\",\"bundler\"]}"
+            fi
+            if [ -f requirements.txt ] || [ -f poetry.lock ] || [ -f Pipfile ]; then
+              MANAGERS="${MANAGERS:+$MANAGERS,}\"pip_requirements\""
+              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group Python pip updates\",\"matchManagers\":[\"pip_requirements\"],\"groupName\":\"Python pip dependencies\",\"labels\":[\"dependencies\",\"automated\",\"python\",\"pip\"]}"
+            fi
+            if [ -f pubspec.yaml ] || [ -f pubspec.lock ]; then
+              MANAGERS="${MANAGERS:+$MANAGERS,}\"pub\""
+              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group Flutter/Dart updates\",\"matchManagers\":[\"pub\"],\"groupName\":\"Flutter Dart dependencies\",\"labels\":[\"dependencies\",\"automated\",\"dart\",\"pub\"]}"
+            fi
+            if [ -f go.mod ] || [ -f go.sum ]; then
+              MANAGERS="${MANAGERS:+$MANAGERS,}\"gomod\""
+              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group Go module updates\",\"matchManagers\":[\"gomod\"],\"groupName\":\"Go module dependencies\",\"labels\":[\"dependencies\",\"automated\",\"go\"]}"
+            fi
+            if [ -f Cargo.toml ] || [ -f Cargo.lock ]; then
+              MANAGERS="${MANAGERS:+$MANAGERS,}\"cargo\""
+              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group Rust Cargo updates\",\"matchManagers\":[\"cargo\"],\"groupName\":\"Rust Cargo dependencies\",\"labels\":[\"dependencies\",\"automated\",\"rust\",\"cargo\"]}"
+            fi
+            if [ -f composer.json ] || [ -f composer.lock ]; then
+              MANAGERS="${MANAGERS:+$MANAGERS,}\"composer\""
+              PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}{\"description\":\"Group PHP Composer updates\",\"matchManagers\":[\"composer\"],\"groupName\":\"PHP Composer dependencies\",\"labels\":[\"dependencies\",\"automated\",\"php\",\"composer\"]}"
+            fi
+            
+            echo "Detected managers: $MANAGERS"
+            
+            # Auto-detect runtime constraints so Renovate resolves compatible versions
+            CONSTRAINTS=""
+            RUBY_VERSION=""
+            if [ -f .ruby-version ]; then
+              RUBY_VERSION=$(head -1 .ruby-version | tr -d '[:space:]')
+            elif [ -f .tool-versions ]; then
+              RUBY_VERSION=$(awk '/^ruby / {print $2}' .tool-versions | tr -d '[:space:]')
+            elif [ -f Gemfile ]; then
+              RUBY_VERSION=$(sed -n "s/^ruby [\"']\([^\"']*\)[\"'].*/\1/p" Gemfile | head -1 | tr -d '[:space:]')
+            fi
+            if [ -n "$RUBY_VERSION" ]; then
+              CONSTRAINTS="\"ruby\":\"$RUBY_VERSION\""
+              echo "Detected Ruby version constraint: $RUBY_VERSION"
+            fi
+            
+            NODE_VERSION=""
+            if [ -f .node-version ]; then
+              NODE_VERSION=$(head -1 .node-version | tr -d '[:space:]')
+            elif [ -f .nvmrc ]; then
+              NODE_VERSION=$(head -1 .nvmrc | tr -d '[:space:]')
+            elif [ -f .tool-versions ]; then
+              NODE_VERSION=$(awk '/^nodejs / {print $2}' .tool-versions | tr -d '[:space:]')
+            fi
+            if [ -n "$NODE_VERSION" ]; then
+              CONSTRAINTS="${CONSTRAINTS:+$CONSTRAINTS,}\"node\":\"$NODE_VERSION\""
+              echo "Detected Node version constraint: $NODE_VERSION"
+            fi
+            
+            CONSTRAINTS_JSON=""
+            if [ -n "$CONSTRAINTS" ]; then
+              CONSTRAINTS_JSON=",\"constraints\":{$CONSTRAINTS}"
+            fi
+            
+            # Common package rules (appended to ecosystem-specific ones)
+            COMMON_RULES='{"matchCategories":["ruby"],"isVulnerabilityAlert":true,"groupName":"Ruby security updates","groupSlug":"rubygems-security","labels":["security","high-priority","ruby"]},{"matchCategories":["js"],"isVulnerabilityAlert":true,"groupName":"npm security updates","groupSlug":"npm-security","labels":["security","high-priority","npm"]},{"matchPackagePatterns":["*"],"isVulnerabilityAlert":true,"groupName":"Security updates","groupSlug":"security","labels":["security","high-priority"]},{"matchUpdateTypes":["patch"],"automerge":false,"labels":["patch-update"]},{"matchDepTypes":["devDependencies"],"labels":["dev-dependencies"],"automerge":false}'
             PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}$COMMON_RULES"
+            
+            # Write results to /tmp/ci-env-exports.sh for platform-specific consumption
+            echo "MANAGERS=$MANAGERS" > /tmp/ci-env-exports.sh
+            echo "PACKAGE_RULES=$PACKAGE_RULES" >> /tmp/ci-env-exports.sh
+            echo "CONSTRAINTS_JSON=$CONSTRAINTS_JSON" >> /tmp/ci-env-exports.sh
+            # Import detected managers
+            if [ -f /tmp/ci-env-exports.sh ]; then
+              . /tmp/ci-env-exports.sh
+            fi
 
             RENOVATE_CONFIG="{\"\$schema\":\"https://docs.renovatebot.com/renovate-schema.json\",\"extends\":[\"config:recommended\"],\"enabled\":true,\"timezone\":\"Europe/Paris\",\"automerge\":false,\"prHourlyLimit\":10,\"prConcurrentLimit\":5,\"ignorePaths\":[\".build/**\",\"**/node_modules/**\",\"**/Pods/**\"],\"osvVulnerabilityAlerts\":true,\"vulnerabilityAlerts\":{\"enabled\":true,\"labels\":[\"security\",\"vulnerability\",\"high-priority\"]},\"dependencyDashboard\":true,\"reportTags\":[\"security\"],\"rangeStrategy\":\"auto\"${MANAGERS:+,\"enabledManagers\":[$MANAGERS]},\"packageRules\":[$PACKAGE_RULES],\"commitMessagePrefix\":\"chore:\",\"commitMessageAction\":\"update\",\"commitMessageTopic\":\"{{depName}}\",\"commitMessageExtra\":\"to {{newVersion}}{{#if isVulnerabilityAlert}} (security){{/if}}\"}"
             echo "RENOVATE_CONFIG=$RENOVATE_CONFIG" >> "$GITHUB_ENV"
@@ -684,7 +802,8 @@ jobs:
       - name: Stop performance monitor
         if: always()
         run: |
-          PERF_OUTPUT="performance-metrics.json"
+          PERF_OUTPUT_FILE=performance-metrics.json
+          PERF_OUTPUT="${PERF_OUTPUT_FILE:-perf-metrics.json}"
           if [ -f /tmp/perf-monitor.pid ]; then
             PERF_PID=$(cat /tmp/perf-monitor.pid)
             kill "$PERF_PID" 2>/dev/null || true
@@ -698,7 +817,7 @@ jobs:
             else
               echo '[]' > "$PERF_OUTPUT"
             fi
-            echo "Collected $(jq 'length' "$PERF_OUTPUT" 2>/dev/null || echo 0) performance samples"
+            echo "Collected $(jq 'length' "$PERF_OUTPUT" 2>/dev/null || echo 0) performance samples in $PERF_OUTPUT"
           else
             echo '[]' > "$PERF_OUTPUT"
             echo "No performance metrics collected"
@@ -727,6 +846,7 @@ jobs:
                 --arg commit_sha "${{ github.sha }}" \
                 --arg branch "${{ inputs.target_base_branch }}" \
                 --arg target_repo "${{ github.repository }}" \
+                --arg platform "github" \
           '
           ($trivy[0].Results // $trivy[0].results // []) as $trivyResults |
           ($trivyResults | map((.Vulnerabilities // .vulnerabilities // [])) | flatten) as $trivyVulns |
@@ -736,10 +856,10 @@ jobs:
           {
             "report": {
               "generated_at": $timestamp,
-              "pipeline_id": $run_id,
+              "pipeline_id": $pipeline_id,
               "commit_sha": $commit_sha,
               "branch": $branch,
-              "platform": "github",
+              "platform": $platform,
               "target_repo": $target_repo,
               "format_version": "1.0"
             },
@@ -774,7 +894,12 @@ jobs:
                               id: .id,
                               summary: .summary,
                               severity: (.database_specific.severity // "UNKNOWN"),
-                              aliases: .aliases
+                              cvss_vector: (.severity[0].score // null),
+                              cvss_type: (.severity[0].type // null),
+                              aliases: .aliases,
+                              published: .published,
+                              modified: .modified,
+                              references: .references
                             }
                         ]
                       }
@@ -790,7 +915,7 @@ jobs:
                         ecosystem: .PkgType,
                         vulnerability_id: .VulnerabilityID,
                         severity: .Severity,
-                        title: (.Title // .Description // "")
+                        title: (.Title // .Description // .PrimaryURL // "")
                       }
                   ]
                 ),
@@ -799,6 +924,72 @@ jobs:
                     [$osvPackages[]?.vulnerabilities[]?.aliases[]? | select(test("^CVE-"))] +
                     [$trivyVulns[]?.VulnerabilityID | select(. != null and test("^CVE-"))]
                   ) | unique
+                ),
+                "severity_levels": (
+                  (
+                    [$osvPackages[]?.vulnerabilities[]?.database_specific?.severity? | select(. != null)] +
+                    [$trivyVulns[]?.Severity | select(. != null)]
+                  ) | unique
+                ),
+                "all_ios_packages": (
+                  (
+                    $trivyResults
+                    | map(
+                        . as $result |
+                        ($result.Packages // [])
+                        | map({
+                            name: .Name,
+                            version: (.Version // ""),
+                            package_manager: ($result.Type | ascii_downcase)
+                          })
+                      )
+                    | flatten
+                    | map(select(.package_manager == "swift" or .package_manager == "cocoapods"))
+                    | unique_by(.name)
+                  ) as $ios_packages
+                  |
+                  (
+                    ($spm_resolved[0].pins // [])
+                    | map({
+                        key_identity: (.identity // "" | ascii_downcase),
+                        key_repo: ((.location // "" | split("/") | last | sub("\\.git$"; "") | ascii_downcase)),
+                        location: .location
+                      })
+                  ) as $spm_entries
+                  |
+                  ($spm_entries | map({(.key_identity): .location}) | add // {}) as $spm_by_identity
+                  |
+                  ($spm_entries | map({(.key_repo): .location}) | add // {}) as $spm_by_repo
+                  |
+                  $ios_packages
+                  | map(
+                      . as $pkg
+                      | ($pkg.name | ascii_downcase) as $name_lower
+                      | ($name_lower | gsub("[^a-z0-9]"; "")) as $name_norm
+                      | . + {
+                          source_url: (
+                            $spm_by_identity[$name_lower]
+                            // $spm_by_repo[$name_lower]
+                            // ([ $spm_entries[]? | select((.key_identity | gsub("[^a-z0-9]"; "")) == $name_norm) | .location ][0])
+                            // ([ $spm_entries[]? | select((.key_repo | gsub("[^a-z0-9]"; "")) == $name_norm) | .location ][0])
+                            // ([ $spm_entries[]?
+                                  | select(
+                                      (.key_identity | gsub("[^a-z0-9]"; "")) as $id_norm
+                                      | ($id_norm | startswith($name_norm)) or ($name_norm | startswith($id_norm))
+                                    )
+                                  | .location
+                               ][0])
+                            // ([ $spm_entries[]?
+                                  | select(
+                                      (.key_repo | gsub("[^a-z0-9]"; "")) as $repo_norm
+                                      | ($repo_norm | startswith($name_norm)) or ($name_norm | startswith($repo_norm))
+                                    )
+                                  | .location
+                               ][0])
+                            // null
+                          )
+                        }
+                    )
                 )
               }
             },
@@ -828,23 +1019,25 @@ jobs:
             "performance": ($perf[0] // []),
             "performance_osv": ($osv_perf[0] // []),
             "performance_trivy": ($trivy_perf[0] // [])
-          }' > combined-report.json
+          }
+          ' > combined-report.json
 
       - name: Print summary
         if: always()
         run: |
+          REPORT_HEADER="RENOVATE SUMMARY (${{ github.repository }})"
           if [ ! -f combined-report.json ]; then
             echo "No combined report generated"
             exit 0
           fi
           echo ""
           echo "=========================================="
-          echo "      RENOVATE SUMMARY (${{ github.repository }})"
+          echo "      ${REPORT_HEADER:-RENOVATE SUMMARY}"
           echo "=========================================="
           jq -r '
             "Generated: " + .report.generated_at,
-            "Run ID:    " + .report.pipeline_id,
-            "Repo:      " + .report.target_repo,
+            "Pipeline:  " + .report.pipeline_id,
+            (if .report.target_repo then "Repo:      " + .report.target_repo else empty end),
             "Branch:    " + .report.branch,
             "",
             "SECURITY:",
