@@ -259,7 +259,6 @@ jobs:
           RENOVATE_REPORT_PATH: renovate-report.json
         with:
           token: ${{ secrets.RENOVATE_TOKEN }}
-          configurationFile: ${{ env.RENOVATE_HAS_CONFIG == 'true' && '' || '' }}
           renovate-version: latest
 
       - name: Create Renovate report from lockfiles
