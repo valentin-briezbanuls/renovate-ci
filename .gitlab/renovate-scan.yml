@@ -146,6 +146,7 @@ osv_vulnerability_scan:
       when: on_success
     - when: never
   before_script:
+    - export DEBIAN_FRONTEND=noninteractive
     - apt-get update -qq
     - apt-get install -y wget jq procps
     - wget -q https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 -O /usr/local/bin/osv-scanner
@@ -331,6 +332,7 @@ trivy_vulnerability_scan:
       when: on_success
     - when: never
   before_script:
+    - export DEBIAN_FRONTEND=noninteractive
     - apt-get update -qq && apt-get install -y curl jq procps
   script:
     - *perf_start

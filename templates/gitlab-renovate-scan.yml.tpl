@@ -72,6 +72,7 @@ osv_vulnerability_scan:
       when: on_success
     - when: never
   before_script:
+    - export DEBIAN_FRONTEND=noninteractive
     - apt-get update -qq
     - apt-get install -y wget jq procps
     - wget -q https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64 -O /usr/local/bin/osv-scanner
@@ -117,6 +118,7 @@ trivy_vulnerability_scan:
       when: on_success
     - when: never
   before_script:
+    - export DEBIAN_FRONTEND=noninteractive
     - apt-get update -qq && apt-get install -y curl jq procps
   script:
     - *perf_start
@@ -258,7 +260,13 @@ renovate_run:
           . /tmp/ci-env-exports.sh
         fi
 
-        export RENOVATE_CONFIG="{\"\$schema\":\"https://docs.renovatebot.com/renovate-schema.json\",\"extends\":[\"config:recommended\"],\"enabled\":true,\"timezone\":\"Europe/Paris\",\"automerge\":false,\"prHourlyLimit\":10,\"prConcurrentLimit\":5,\"ignorePaths\":[\".build/**\",\"**/node_modules/**\",\"**/Pods/**\"],\"osvVulnerabilityAlerts\":true,\"vulnerabilityAlerts\":{\"enabled\":true,\"labels\":[\"security\",\"vulnerability\",\"high-priority\"],\"prBodyNotes\":[\"**Severity:** {{{vulnerabilitySeverity}}}\",\"**CVEs:** {{{cveUrls}}}\"]}${MANAGERS:+,\"enabledManagers\":[$MANAGERS]},\"packageRules\":[$PACKAGE_RULES]${CONSTRAINTS_JSON},\"commitMessagePrefix\":\"chore:\",\"commitMessageAction\":\"update\",\"commitMessageTopic\":\"{{depName}}\",\"commitMessageExtra\":\"to {{newVersion}}{{#if isVulnerabilityAlert}} (security){{/if}}\"}"
+        # Build RENOVATE_CONFIG - break into multiple lines to avoid shell quoting issues
+        RENOVATE_CONFIG='{"$schema":"https://docs.renovatebot.com/renovate-schema.json","extends":["config:recommended"],"enabled":true,"timezone":"Europe/Paris","automerge":false,"prHourlyLimit":10,"prConcurrentLimit":5,"ignorePaths":[".build/**","**/node_modules/**","**/Pods/**"],"osvVulnerabilityAlerts":true,"vulnerabilityAlerts":{"enabled":true,"labels":["security","vulnerability","high-priority"],"prBodyNotes":["**Severity:** {{{vulnerabilitySeverity}}}","**CVEs:** {{{cveUrls}}}"]},'
+        if [ -n "$MANAGERS" ]; then
+          RENOVATE_CONFIG="${RENOVATE_CONFIG}\"enabledManagers\":[$MANAGERS],"
+        fi
+        RENOVATE_CONFIG="${RENOVATE_CONFIG}\"packageRules\":[$PACKAGE_RULES]${CONSTRAINTS_JSON},\"commitMessagePrefix\":\"chore:\",\"commitMessageAction\":\"update\",\"commitMessageTopic\":\"{{depName}}\",\"commitMessageExtra\":\"to {{newVersion}}{{#if isVulnerabilityAlert}} (security){{/if}}\"}"
+        export RENOVATE_CONFIG
         echo "Using centralized inline Renovate config from CI template"
       fi
 

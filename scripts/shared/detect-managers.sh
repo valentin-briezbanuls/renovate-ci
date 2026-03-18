@@ -82,6 +82,9 @@ COMMON_RULES='{"matchCategories":["ruby"],"isVulnerabilityAlert":true,"groupName
 PACKAGE_RULES="${PACKAGE_RULES:+$PACKAGE_RULES,}$COMMON_RULES"
 
 # Write results to /tmp/ci-env-exports.sh for platform-specific consumption
-echo "MANAGERS=$MANAGERS" > /tmp/ci-env-exports.sh
-echo "PACKAGE_RULES=$PACKAGE_RULES" >> /tmp/ci-env-exports.sh
-echo "CONSTRAINTS_JSON=$CONSTRAINTS_JSON" >> /tmp/ci-env-exports.sh
+# Export as bash arrays and pre-computed JSON to avoid quoting issues
+{
+  echo "MANAGERS='$MANAGERS'"
+  echo "PACKAGE_RULES='$PACKAGE_RULES'"
+  echo "CONSTRAINTS_JSON='$CONSTRAINTS_JSON'"
+} > /tmp/ci-env-exports.sh
