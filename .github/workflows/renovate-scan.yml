@@ -778,6 +778,7 @@ jobs:
           LOG_LEVEL: debug
           RENOVATE_EXPORT_SUMMARY: "true"
           RENOVATE_REPORT_PATH: renovate-report.json
+          RENOVATE_POST_UPDATE_OPTIONS: '["bundlerConservative"]'
         with:
           token: ${{ secrets.RENOVATE_TOKEN || github.token }}
           renovate-version: latest
