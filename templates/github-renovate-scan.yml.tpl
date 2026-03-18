@@ -248,7 +248,7 @@ jobs:
           if [ "${DRY_RUN_INPUT}" = "full" ]; then
             echo "RENOVATE_DRY_RUN=full" >> "$GITHUB_ENV"
           elif [ "${DRY_RUN_INPUT}" = "false" ]; then
-            echo "RENOVATE_DRY_RUN=" >> "$GITHUB_ENV"
+            echo "RENOVATE_DRY_RUN=false" >> "$GITHUB_ENV"
           else
             echo "RENOVATE_DRY_RUN=lookup" >> "$GITHUB_ENV"
           fi
