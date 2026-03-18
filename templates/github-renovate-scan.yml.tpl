@@ -247,12 +247,14 @@ jobs:
 
           if [ "${DRY_RUN_INPUT}" = "full" ]; then
             echo "RENOVATE_DRY_RUN=full" >> "$GITHUB_ENV"
+            echo "Renovate dry-run mode: full"
           elif [ "${DRY_RUN_INPUT}" = "false" ]; then
-            echo "RENOVATE_DRY_RUN=false" >> "$GITHUB_ENV"
+            # Real mode: do NOT set RENOVATE_DRY_RUN — Renovate defaults to real mode when unset
+            echo "Renovate dry-run mode: real (RENOVATE_DRY_RUN not set)"
           else
             echo "RENOVATE_DRY_RUN=lookup" >> "$GITHUB_ENV"
+            echo "Renovate dry-run mode: lookup"
           fi
-          echo "Renovate dry-run mode: ${DRY_RUN_INPUT}"
 
       - name: Set target repository for Renovate
         run: |
