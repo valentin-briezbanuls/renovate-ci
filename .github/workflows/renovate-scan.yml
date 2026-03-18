@@ -738,7 +738,7 @@ jobs:
               . /tmp/ci-env-exports.sh
             fi
 
-            RENOVATE_CONFIG='{"$schema":"https://docs.renovatebot.com/renovate-schema.json","extends":["config:recommended"],"enabled":true,"timezone":"Europe/Paris","automerge":false,"prHourlyLimit":10,"prConcurrentLimit":5,"ignorePaths":[".build/**","**/node_modules/**","**/Pods/**"],"osvVulnerabilityAlerts":true,"vulnerabilityAlerts":{"enabled":true,"labels":["security","vulnerability","high-priority"]},"dependencyDashboard":true,"reportTags":["security"],"rangeStrategy":"auto",'
+            RENOVATE_CONFIG='{"$schema":"https://docs.renovatebot.com/renovate-schema.json","extends":["config:recommended"],"enabled":true,"timezone":"Europe/Paris","automerge":false,"prHourlyLimit":10,"prConcurrentLimit":5,"ignorePaths":[".build/**","**/node_modules/**","**/Pods/**"],"osvVulnerabilityAlerts":true,"vulnerabilityAlerts":{"enabled":true,"labels":["security","vulnerability","high-priority"]},"dependencyDashboard":true,"reportTags":["security"],"rangeStrategy":"auto","postUpdateOptions":["bundlerConservative"],'
             if [ -n "$MANAGERS" ]; then
               RENOVATE_CONFIG="${RENOVATE_CONFIG}\"enabledManagers\":[$MANAGERS],"
             fi
