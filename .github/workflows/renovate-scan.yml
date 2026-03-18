@@ -26,6 +26,16 @@
 name: Renovate Scan
 
 on:
+  workflow_dispatch:
+    inputs:
+      target_base_branch:
+        description: "Base branch to scan"
+        type: string
+        default: "main"
+      dry_run_mode:
+        description: "Renovate dry-run mode: lookup | full | false"
+        type: string
+        default: "lookup"
   workflow_call:
     inputs:
       target_base_branch:
