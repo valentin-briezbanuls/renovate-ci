@@ -60,6 +60,7 @@ on:
 permissions:
   pull-requests: write
   contents: write
+  issues: write
 
 jobs:
   # ---------------------------------------------------------------------------
