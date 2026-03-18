@@ -15,11 +15,14 @@
 #     workflow_dispatch:
 #     schedule:
 #       - cron: '0 3 * * 1'
+#   permissions:
+#     pull-requests: write
+#     contents: write
 #   jobs:
 #     renovate:
 #       uses: valentin-briezbanuls/renovate-ci/.github/workflows/renovate-scan.yml@main
 #       secrets:
-#         RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+#         RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN || github.token }}
 #         DASHBOARD_WEBHOOK_URL: ${{ secrets.RENOVATE_DASHBOARD_WEBHOOK_URL }}
 # =============================================================================
 
@@ -48,11 +51,15 @@ on:
         default: "lookup"
     secrets:
       RENOVATE_TOKEN:
-        description: "GitHub PAT with repo scope — used by Renovate to open PRs"
-        required: true
+        description: "GitHub PAT with repo scope — or omit to use the automatic GITHUB_TOKEN"
+        required: false
       DASHBOARD_WEBHOOK_URL:
         description: "Full URL to POST combined-report.json back to the dashboard"
-        required: true
+        required: false
+
+permissions:
+  pull-requests: write
+  contents: write
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -255,7 +262,7 @@ jobs:
       - name: Run Renovate
         uses: renovatebot/github-action@v46.1.5
         env:
-          RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN }}
+          RENOVATE_TOKEN: ${{ secrets.RENOVATE_TOKEN || github.token }}
           RENOVATE_PLATFORM: github
           RENOVATE_GIT_AUTHOR: "Renovate Bot <renovate@isee-u.fr>"
           RENOVATE_REPOSITORY_CACHE: enabled
@@ -264,7 +271,7 @@ jobs:
           RENOVATE_EXPORT_SUMMARY: "true"
           RENOVATE_REPORT_PATH: renovate-report.json
         with:
-          token: ${{ secrets.RENOVATE_TOKEN }}
+          token: ${{ secrets.RENOVATE_TOKEN || github.token }}
           renovate-version: latest
 
       - name: Create Renovate report from lockfiles
