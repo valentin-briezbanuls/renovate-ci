@@ -281,49 +281,50 @@ jobs:
       - name: Create Renovate report from lockfiles
         if: always()
         run: |
-          # Generate renovate-report.json structure with detected dependencies
-          # This ensures gem updates are visible in the dashboard alongside CVEs
+          # Prefer Renovate's own report (RENOVATE_REPORT_PATH=renovate-report.json).
+          # It contains ALL deps from packageFiles — including up-to-date ones.
+          # Fall back to awk parsing only when Renovate didn't produce a report.
 
-          REPO="${{ github.repository }}"
-          REPORT_JSON='{
-            "repositories": {
-              "'$REPO'": {
-                "repository": "'$REPO'",
-                "branches": [],
-                "packageFiles": {}
-              }
-            }
-          }'
-
-          # Check for Ruby/Bundler and extract gems
-          if [ -f "Gemfile.lock" ]; then
-            echo "Extracting Ruby gems from Gemfile.lock..."
-
-            # Extract gems from the GEM section
-            GEMS=$(awk '/^GEM$/,/^PLATFORMS$/ {
-              if ($0 ~ /^  [a-z0-9_-]+ \(/) {
-                match($0, /^  ([a-z0-9_-]+) \(([^)]+)\)/, m)
-                printf "{\"depName\": \"%s\", \"currentVersion\": \"%s\", \"updates\": []}\n", m[1], m[2]
-              }
-            }' Gemfile.lock)
-
-            if [ -n "$GEMS" ]; then
-              # Convert newline-separated objects to JSON array
-              DEPS_ARRAY=$(echo "$GEMS" | jq -s '.' 2>/dev/null || echo '[]')
-
-              # Build the packageFiles structure
-              REPORT_JSON=$(echo "$REPORT_JSON" | jq \
-                --argjson deps "$DEPS_ARRAY" \
-                '.repositories["'$REPO'"].packageFiles.bundler = [{"fileName": "Gemfile", "deps": $deps}]')
+          RENOVATE_REPORT_HAS_DATA=false
+          if [ -f "renovate-report.json" ] && jq empty renovate-report.json 2>/dev/null; then
+            REPO_COUNT=$(jq '.repositories | length // 0' renovate-report.json 2>/dev/null || echo 0)
+            if [ "$REPO_COUNT" -gt "0" ]; then
+              RENOVATE_REPORT_HAS_DATA=true
+              echo "Using Renovate's own report (found $REPO_COUNT repositories)"
             fi
           fi
 
-          # Save the report
-          echo "$REPORT_JSON" | jq '.' > renovate-report.json
+          if [ "$RENOVATE_REPORT_HAS_DATA" = "true" ]; then
+            echo "Skipping lockfile fallback — Renovate report is complete."
+          else
+            echo "Renovate report missing or empty — building from Gemfile.lock..."
+            REPO="${{ github.repository }}"
+            REPORT_JSON='{"repositories":{"'"$REPO"'":{"repository":"'"$REPO"'","branches":[],"packageFiles":{}}}}'
 
-          # Validate
-          if ! jq empty renovate-report.json 2>/dev/null; then
-            echo '{}' > renovate-report.json
+            if [ -f "Gemfile.lock" ]; then
+              # Extract top-level gems (4-space indent in GEM > specs section)
+              GEMS=$(awk '/^GEM$/,/^PLATFORMS$/ {
+                if ($0 ~ /^    [a-zA-Z0-9_-]+ \(/) {
+                  match($0, /^    ([a-zA-Z0-9_-]+) \(([^)]+)\)/, m)
+                  if (m[1] != "" && m[2] != "")
+                    printf "{\"depName\": \"%s\", \"currentVersion\": \"%s\", \"updates\": []}\n", m[1], m[2]
+                }
+              }' Gemfile.lock)
+
+              if [ -n "$GEMS" ]; then
+                DEPS_ARRAY=$(echo "$GEMS" | jq -s '.' 2>/dev/null || echo '[]')
+                REPORT_JSON=$(echo "$REPORT_JSON" | jq \
+                  --argjson deps "$DEPS_ARRAY" \
+                  --arg repo "$REPO" \
+                  '.repositories[$repo].packageFiles.bundler = [{"fileName": "Gemfile", "deps": $deps}]')
+                echo "Extracted $(echo "$DEPS_ARRAY" | jq 'length') gems from Gemfile.lock"
+              fi
+            fi
+
+            echo "$REPORT_JSON" | jq '.' > renovate-report.json
+            if ! jq empty renovate-report.json 2>/dev/null; then
+              echo '{}' > renovate-report.json
+            fi
           fi
 
           echo "Created renovate-report.json with detected dependencies"
