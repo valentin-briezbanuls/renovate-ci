@@ -3,8 +3,7 @@ stages:
   - renovate
 
 include:
-  - project: 'valentin178/renovate-ci'
-    file: '.gitlab/renovate-scan.yml'
+  - remote: 'https://gitlab.com/valentin178/renovate-ci/-/raw/main/.gitlab/renovate-scan.yml'
 
 check_generated_files:
   stage: .pre
