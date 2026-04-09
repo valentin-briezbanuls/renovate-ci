@@ -133,7 +133,6 @@ stages:
 osv_vulnerability_scan:
   image: ubuntu:noble
   stage: security
-  tags: [mac]
   rules:
     - if: '$CI_PIPELINE_SOURCE == "trigger"'
       exists: *osv_lockfiles
@@ -322,7 +321,6 @@ osv_vulnerability_scan:
 trivy_vulnerability_scan:
   image: ubuntu:noble
   stage: security
-  tags: [mac]
   rules:
     - if: '$CI_PIPELINE_SOURCE == "trigger"'
       exists: *ios_lockfiles
@@ -408,7 +406,6 @@ trivy_vulnerability_scan:
 renovate_run:
   image: renovate/renovate:latest
   stage: renovate
-  tags: [mac]
   timeout: 60m
   needs:
     - job: osv_vulnerability_scan
