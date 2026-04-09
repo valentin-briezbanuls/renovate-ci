@@ -144,6 +144,9 @@ osv_vulnerability_scan:
     - if: '$CI_PIPELINE_SOURCE == "web"'
       exists: *osv_lockfiles
       when: on_success
+    - if: '$CI_PIPELINE_SOURCE == "api"'
+      exists: *osv_lockfiles
+      when: on_success
     - when: never
   before_script:
     - export DEBIAN_FRONTEND=noninteractive
@@ -330,6 +333,9 @@ trivy_vulnerability_scan:
     - if: '$CI_PIPELINE_SOURCE == "web"'
       exists: *ios_lockfiles
       when: on_success
+    - if: '$CI_PIPELINE_SOURCE == "api"'
+      exists: *ios_lockfiles
+      when: on_success
     - when: never
   before_script:
     - export DEBIAN_FRONTEND=noninteractive
@@ -417,6 +423,8 @@ renovate_run:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: on_success
     - if: '$CI_PIPELINE_SOURCE == "web"'
+      when: on_success
+    - if: '$CI_PIPELINE_SOURCE == "api"'
       when: on_success
     - when: never
   variables:
