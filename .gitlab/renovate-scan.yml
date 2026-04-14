@@ -133,15 +133,17 @@ stages:
 osv_vulnerability_scan:
   image: ubuntu:noble
   stage: security
-  tags: [mac]
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "trigger" && $RUN_RENOVATE == "1"'
+    - if: '$CI_PIPELINE_SOURCE == "trigger"'
       exists: *osv_lockfiles
       when: on_success
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       exists: *osv_lockfiles
       when: on_success
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_RENOVATE == "1"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+      exists: *osv_lockfiles
+      when: on_success
+    - if: '$CI_PIPELINE_SOURCE == "api"'
       exists: *osv_lockfiles
       when: on_success
     - when: never
@@ -319,15 +321,17 @@ osv_vulnerability_scan:
 trivy_vulnerability_scan:
   image: ubuntu:noble
   stage: security
-  tags: [mac]
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "trigger" && $RUN_RENOVATE == "1"'
+    - if: '$CI_PIPELINE_SOURCE == "trigger"'
       exists: *ios_lockfiles
       when: on_success
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       exists: *ios_lockfiles
       when: on_success
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_RENOVATE == "1"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+      exists: *ios_lockfiles
+      when: on_success
+    - if: '$CI_PIPELINE_SOURCE == "api"'
       exists: *ios_lockfiles
       when: on_success
     - when: never
@@ -402,7 +406,6 @@ trivy_vulnerability_scan:
 renovate_run:
   image: renovate/renovate:latest
   stage: renovate
-  tags: [mac]
   timeout: 60m
   needs:
     - job: osv_vulnerability_scan
@@ -412,11 +415,13 @@ renovate_run:
       artifacts: true
       optional: true
   rules:
-    - if: '$CI_PIPELINE_SOURCE == "trigger" && $RUN_RENOVATE == "1"'
+    - if: '$CI_PIPELINE_SOURCE == "trigger"'
       when: on_success
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: on_success
-    - if: '$CI_PIPELINE_SOURCE == "web" && $RUN_RENOVATE == "1"'
+    - if: '$CI_PIPELINE_SOURCE == "web"'
+      when: on_success
+    - if: '$CI_PIPELINE_SOURCE == "api"'
       when: on_success
     - when: never
   variables:
