@@ -63,12 +63,14 @@ report:
         name: renovate-report
         path: .
     - name: Post Report
+      env:
+        VIGISTACK_WEBHOOK_TOKEN: ${{ secrets.VIGISTACK_WEBHOOK_TOKEN }}
       run: |
         if [ -f renovate-report.json ]; then
           REPORT_CONTENT=$(cat renovate-report.json | jq -c .)
           curl -s -X POST \
             -H "Content-Type: application/json" \
-            -d "{\"token\":\"fUl0W7bYExeVwFXa_lyVOucuhMT7hvMD_y7h58jyZ_4\",\"report\":$REPORT_CONTENT}" \
-            'https://31e2-2a01-e0a-84-52b0-d5b1-3c0-eb80-e892.ngrok-free.app/webhooks/ci_report'
+            -d "{\"token\":\"$VIGISTACK_WEBHOOK_TOKEN\",\"report\":$REPORT_CONTENT}" \
+            'https://vigistack.staging.isee-u.fr/webhooks/ci_report'
         fi
 
