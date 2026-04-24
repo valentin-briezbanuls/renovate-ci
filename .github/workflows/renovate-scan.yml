@@ -1119,7 +1119,7 @@ jobs:
             -X POST \
             -H "Content-Type: application/json" \
             --max-time 30 \
-            -d @combined-report.json \
+            --data-binary @combined-report.json \
             "$WEBHOOK_URL")
 
           echo "Dashboard webhook response: HTTP $HTTP_STATUS"
