@@ -1093,6 +1093,14 @@ jobs:
           ' combined-report.json
           echo "=========================================="
 
+      - name: Upload combined report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: combined-report
+          path: combined-report.json
+          retention-days: 7
+
       - name: POST report to dashboard
         if: always()
         run: |
@@ -1107,9 +1115,10 @@ jobs:
             exit 0
           fi
 
-          HTTP_STATUS=$(curl -s -o /tmp/webhook-response.txt -w "%{http_code}" \
+          HTTP_STATUS=$(curl -s -L -o /tmp/webhook-response.txt -w "%{http_code}" \
             -X POST \
             -H "Content-Type: application/json" \
+            --max-time 30 \
             -d @combined-report.json \
             "$WEBHOOK_URL")
 
