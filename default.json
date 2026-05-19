@@ -6,7 +6,7 @@
   "automerge": false,
   "prHourlyLimit": 10,
   "prConcurrentLimit": 5,
-  "ignorePaths": [".build/**", "**/node_modules/**", "**/Pods/**"],
+  "ignorePaths": [".build/**", "**/node_modules/**", "**/Pods/**", "spec/fixtures/**"],
   "osvVulnerabilityAlerts": true,
   "vulnerabilityAlerts": {
     "enabled": true,
